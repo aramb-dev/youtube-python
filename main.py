@@ -1,6 +1,9 @@
 from flask import Flask, request, jsonify
 from pytubefix import YouTube
 import re
+import ssl
+
+ssl._create_default_https_context = ssl._create_unverified_context
 
 app = Flask(__name__)
 
