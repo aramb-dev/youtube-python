@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from pytubefix import YouTube
 import re
 import ssl
@@ -9,30 +9,16 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 app = Flask(__name__)
 
-def download_video(url, resolution):
+def get_stream_object(url, resolution):
     try:
         yt = YouTube(url)
-        
-        # Debug: Print all available streams
-        print(f"Available progressive streams for {url}:")
-        for stream in yt.streams.filter(progressive=True, file_extension='mp4'):
-            print(f"  - {stream.resolution} - {stream.mime_type}")
-        
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
         if stream:
-            out_dir = f"./downloads/{url.split('v=')[1].split('&')[0]}"
-            import os
-            os.makedirs(out_dir, exist_ok=True)
-            stream.download(output_path=out_dir)
-            return True, None
+            return stream, None
         else:
-            print(f"\nTrying non-progressive streams:")
-            for stream in yt.streams.filter(file_extension='mp4', res=resolution):
-                print(f"  - {stream.resolution} - {stream.mime_type} - audio: {stream.includes_audio_track}")
-            
-            return False, "Video with the specified resolution not found."
+            return None, "Video with the specified resolution not found."
     except Exception as e:
-        return False, str(e)
+        return None, str(e)
 
 def get_thumbnail_data(url):
     try:
@@ -50,7 +36,6 @@ def get_thumbnail_data(url):
 def get_video_info(url):
     try:
         yt = YouTube(url)
-        stream = yt.streams.first()
         video_info = {
             "title": yt.title,
             "author": yt.author,
@@ -79,10 +64,33 @@ def download_by_resolution(resolution):
     if not is_valid_youtube_url(url):
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
-    success, error_message = download_video(url, resolution)
+    stream, error_message = get_stream_object(url, resolution)
     
-    if success:
-        return jsonify({"message": f"Video with resolution {resolution} downloaded successfully."}), 200
+    if stream:
+        try:
+            # Get the direct URL to the video file
+            video_url = stream.url
+            title = stream.title
+            
+            # Stream the content from the direct URL to the client
+            req = urlopen(video_url)
+            
+            def generate():
+                while True:
+                    chunk = req.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+
+            return Response(
+                stream_with_context(generate()),
+                headers={
+                    "Content-Disposition": f"attachment; filename={title}.mp4",
+                    "Content-Type": "video/mp4",
+                }
+            )
+        except Exception as e:
+             return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
     else:
         return jsonify({"error": error_message}), 500
 
