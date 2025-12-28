@@ -1,7 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from pytubefix import YouTube
 import re
 import ssl
+from io import BytesIO
+from urllib.request import urlopen
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -31,6 +33,19 @@ def download_video(url, resolution):
             return False, "Video with the specified resolution not found."
     except Exception as e:
         return False, str(e)
+
+def get_thumbnail_data(url):
+    try:
+        yt = YouTube(url)
+        thumbnail_url = yt.thumbnail_url
+        
+        # Fetch the image data
+        with urlopen(thumbnail_url) as response:
+            image_data = response.read()
+            
+        return BytesIO(image_data), None
+    except Exception as e:
+        return None, str(e)
 
 def get_video_info(url):
     try:
@@ -119,6 +134,29 @@ def available_resolutions():
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/download_thumbnail', methods=['POST'])
+def download_thumbnail():
+    data = request.get_json()
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({"error": "Missing 'url' parameter in the request body."}), 400
+
+    if not is_valid_youtube_url(url):
+        return jsonify({"error": "Invalid YouTube URL."}), 400
+    
+    image_io, error_message = get_thumbnail_data(url)
+    
+    if image_io:
+        return send_file(
+            image_io,
+            mimetype='image/jpeg',
+            as_attachment=True,
+            download_name='thumbnail.jpg'
+        )
+    else:
+        return jsonify({"error": error_message}), 500
     
 if __name__ == '__main__':
     app.run(debug=True)
