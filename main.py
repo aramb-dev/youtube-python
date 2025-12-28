@@ -43,6 +43,7 @@ def get_video_info(url):
             "views": yt.views,
             "description": yt.description,
             "publish_date": yt.publish_date,
+            "thumbnail_url": yt.thumbnail_url
         }
         return video_info, None
     except Exception as e:
