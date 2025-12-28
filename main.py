@@ -165,6 +165,10 @@ def download_thumbnail():
         )
     else:
         return jsonify({"error": error_message}), 500
+
+@app.route('/check-connection', methods=['GET'])
+def check_connection():
+    return "200 OK - API is running!", 200
     
 if __name__ == '__main__':
     app.run(debug=True)
