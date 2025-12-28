@@ -3,6 +3,7 @@ env
 __pycache__/
 *.pyc
 .DS_Store
+._*
 
 downloads/
 *.mp4
