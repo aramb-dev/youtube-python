@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 def get_stream_object(url, resolution):
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, client='WEB')
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
         if stream:
             return stream, None
@@ -22,7 +22,7 @@ def get_stream_object(url, resolution):
 
 def get_thumbnail_data(url):
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, client='WEB')
         thumbnail_url = yt.thumbnail_url
         
         # Fetch the image data
@@ -35,7 +35,7 @@ def get_thumbnail_data(url):
 
 def get_video_info(url):
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, client='WEB')
         video_info = {
             "title": yt.title,
             "author": yt.author,
@@ -125,7 +125,7 @@ def available_resolutions():
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, client='WEB')
         progressive_resolutions = list(set([
             stream.resolution 
             for stream in yt.streams.filter(progressive=True, file_extension='mp4')
