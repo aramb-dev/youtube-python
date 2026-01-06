@@ -187,6 +187,71 @@ def download_thumbnail():
 @app.route('/check-connection', methods=['GET'])
 def check_connection():
     return "200 OK - API is running!", 200
+
+@app.route('/help', methods=['GET'])
+@require_api_key
+def api_help():
+    help_data = {
+        "api_name": "YouTube Video Downloader API",
+        "authentication": {
+            "header": "X-API-Key",
+            "required": True
+        },
+        "endpoints": [
+            {
+                "path": "/check-connection",
+                "method": "GET",
+                "description": "Public heartbeat endpoint to verify the API is live.",
+                "auth_required": False
+            },
+            {
+                "path": "/video_info",
+                "method": "POST",
+                "description": "Retrieves comprehensive metadata about a YouTube video.",
+                "request_body": {
+                    "url": "string (Valid YouTube URL)"
+                },
+                "auth_required": True
+            },
+            {
+                "path": "/available_resolutions",
+                "method": "POST",
+                "description": "Lists all available video resolutions for the provided URL.",
+                "request_body": {
+                    "url": "string (Valid YouTube URL)"
+                },
+                "auth_required": True
+            },
+            {
+                "path": "/download/<resolution>",
+                "method": "POST",
+                "description": "Streams the video file directly as an attachment. Note: Vercel may timeout for long videos.",
+                "parameters": {
+                    "resolution": "e.g., 360p, 720p, 1080p"
+                },
+                "request_body": {
+                    "url": "string (Valid YouTube URL)"
+                },
+                "auth_required": True
+            },
+            {
+                "path": "/download_thumbnail",
+                "method": "POST",
+                "description": "Downloads the high-quality thumbnail image for the video.",
+                "request_body": {
+                    "url": "string (Valid YouTube URL)"
+                },
+                "auth_required": True
+            },
+            {
+                "path": "/help",
+                "method": "GET",
+                "description": "Returns this documentation.",
+                "auth_required": True
+            }
+        ]
+    }
+    return jsonify(help_data), 200
     
 if __name__ == '__main__':
     app.run(debug=True)
