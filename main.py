@@ -2,12 +2,26 @@ from flask import Flask, request, jsonify, send_file, Response, stream_with_cont
 from pytubefix import YouTube
 import re
 import ssl
+import os
 from io import BytesIO
 from urllib.request import urlopen
+from functools import wraps
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
 app = Flask(__name__)
+
+# Security: API Key required for functional endpoints
+API_KEY = os.environ.get('API_KEY', 'X-eGKp0yitrTNE4LXilSo_9zsDbOcwcqgj7qLTkhVT0')
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if request.headers.get('X-API-Key') == API_KEY:
+            return f(*args, **kwargs)
+        else:
+            return jsonify({"error": "Unauthorized: Invalid or missing API Key."}), 401
+    return decorated_function
 
 def get_stream_object(url, resolution):
     try:
@@ -54,6 +68,7 @@ def is_valid_youtube_url(url):
     return re.match(pattern, url) is not None
 
 @app.route('/download/<resolution>', methods=['POST'])
+@require_api_key
 def download_by_resolution(resolution):
     data = request.get_json()
     url = data.get('url')
@@ -95,6 +110,7 @@ def download_by_resolution(resolution):
         return jsonify({"error": error_message}), 500
 
 @app.route('/video_info', methods=['POST'])
+@require_api_key
 def video_info():
     data = request.get_json()
     url = data.get('url')
@@ -114,6 +130,7 @@ def video_info():
 
 
 @app.route('/available_resolutions', methods=['POST'])
+@require_api_key
 def available_resolutions():
     data = request.get_json()
     url = data.get('url')
@@ -144,6 +161,7 @@ def available_resolutions():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/download_thumbnail', methods=['POST'])
+@require_api_key
 def download_thumbnail():
     data = request.get_json()
     url = data.get('url')
