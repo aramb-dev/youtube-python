@@ -3,9 +3,20 @@ from pytubefix import YouTube
 import re
 import ssl
 import os
+import sentry_sdk
 from io import BytesIO
 from urllib.request import urlopen
 from functools import wraps
+
+# Initialize Sentry
+sentry_sdk.init(
+    dsn="https://703c70222d9f64e1b656b744a9267205@o480658.ingest.us.sentry.io/4510664628109312",
+    # Add data like request headers and IP for users,
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+    send_default_pii=True,
+    # Enable sending logs to Sentry
+    enable_logs=True,
+)
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -247,10 +258,22 @@ def api_help():
                 "method": "GET",
                 "description": "Returns this documentation.",
                 "auth_required": True
+            },
+            {
+                "path": "/debug-sentry",
+                "method": "GET",
+                "description": "Triggers a ZeroDivisionError to verify Sentry integration.",
+                "auth_required": True
             }
         ]
     }
     return jsonify(help_data), 200
+
+@app.route('/debug-sentry')
+@require_api_key
+def trigger_error():
+    division_by_zero = 1 / 0
+    return "Error Triggered", 500
     
 if __name__ == '__main__':
     app.run(debug=True)
