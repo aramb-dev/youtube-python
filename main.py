@@ -64,7 +64,8 @@ def get_video_info(url):
         return None, str(e)
 
 def is_valid_youtube_url(url):
-    pattern = r"^(https?://)?(www\.)?youtube\.com/watch\?v=[\w-]+(&\S*)?$"
+    # Supports youtube.com/watch?v=... and youtu.be/...
+    pattern = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w-]+([?&]\S*)?$"
     return re.match(pattern, url) is not None
 
 @app.route('/download/<resolution>', methods=['POST'])
