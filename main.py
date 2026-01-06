@@ -38,9 +38,8 @@ def get_stream_object(url, resolution):
     try:
         yt = YouTube(url, client='ANDROID')
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
-        if stream:
-            return stream, None
     except Exception as e:
+        sentry_sdk.capture_exception(e)
         return None, f"({type(e).__name__}): {str(e)}"
 
 def get_thumbnail_data(url):
@@ -52,10 +51,10 @@ def get_thumbnail_data(url):
         with urlopen(thumbnail_url) as response:
             image_data = response.read()
             
-        return BytesIO(image_data), None
-    except Exception as e:
-        return None, f"({type(e).__name__}): {str(e)}"
-
+                    return BytesIO(image_data), None
+                except Exception as e:
+                    sentry_sdk.capture_exception(e)
+                    return None, f"({type(e).__name__}): {str(e)}"
 def get_video_info(url):
     try:
         yt = YouTube(url, client='ANDROID')
@@ -70,6 +69,7 @@ def get_video_info(url):
         }
         return video_info, None
     except Exception as e:
+        sentry_sdk.capture_exception(e)
         return None, f"({type(e).__name__}): {str(e)}"
 
 def is_valid_youtube_url(url):
@@ -115,6 +115,7 @@ def download_by_resolution(resolution):
                 }
             )
         except Exception as e:
+             sentry_sdk.capture_exception(e)
              return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
     else:
         return jsonify({"error": error_message}), 500
@@ -168,6 +169,7 @@ def available_resolutions():
             "all": sorted(all_resolutions)
         }), 200
     except Exception as e:
+        sentry_sdk.capture_exception(e)
         return jsonify({"error": f"({type(e).__name__}): {str(e)}"}), 500
 
 @app.route('/download_thumbnail', methods=['POST'])
