@@ -6,6 +6,7 @@ import os
 import sentry_sdk
 from io import BytesIO
 from urllib.request import urlopen
+from urllib.parse import quote
 from functools import wraps
 
 # Initialize Sentry
@@ -104,6 +105,9 @@ def download_by_resolution(resolution):
             # Stream the content from the direct URL to the client
             req = urlopen(video_url)
             
+            # Encode title for Content-Disposition header to avoid Unicode errors
+            safe_title = quote(title)
+            
             def generate():
                 while True:
                     chunk = req.read(4096)
@@ -114,7 +118,7 @@ def download_by_resolution(resolution):
             return Response(
                 stream_with_context(generate()),
                 headers={
-                    "Content-Disposition": f"attachment; filename={title}.mp4",
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}.mp4",
                     "Content-Type": "video/mp4",
                 }
             )
