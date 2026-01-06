@@ -4,6 +4,7 @@ import re
 import ssl
 import os
 import sentry_sdk
+import threading
 from io import BytesIO
 from urllib.request import urlopen
 from urllib.parse import quote
@@ -22,6 +23,9 @@ sentry_sdk.init(
 ssl._create_default_https_context = ssl._create_unverified_context
 
 app = Flask(__name__)
+
+# Rate limiting: Max 6 simultaneous downloads
+download_semaphore = threading.BoundedSemaphore(value=6)
 
 # Security: API Key required for functional endpoints
 API_KEY = os.environ.get('API_KEY', 'X-eGKp0yitrTNE4LXilSo_9zsDbOcwcqgj7qLTkhVT0')
@@ -94,39 +98,54 @@ def download_by_resolution(resolution):
     if not is_valid_youtube_url(url):
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
-    stream, error_message = get_stream_object(url, resolution)
-    
-    if stream:
-        try:
-            # Get the direct URL to the video file
-            video_url = stream.url
-            title = stream.title
-            
-            # Stream the content from the direct URL to the client
-            req = urlopen(video_url)
-            
-            # Encode title for Content-Disposition header to avoid Unicode errors
-            safe_title = quote(title)
-            
-            def generate():
-                while True:
-                    chunk = req.read(4096)
-                    if not chunk:
-                        break
-                    yield chunk
+    # Attempt to acquire a download slot
+    acquired = download_semaphore.acquire(blocking=True, timeout=5)
+    if not acquired:
+        return jsonify({"error": "Server busy: Too many concurrent downloads. Please try again in a minute."}), 503
 
-            return Response(
-                stream_with_context(generate()),
-                headers={
-                    "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}.mp4",
-                    "Content-Type": "video/mp4",
-                }
-            )
-        except Exception as e:
-             sentry_sdk.capture_exception(e)
-             return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
-    else:
-        return jsonify({"error": error_message}), 500
+    # Ensure release happens even if get_stream_object or urlopen fails
+    semaphore_released = False
+    try:
+        stream, error_message = get_stream_object(url, resolution)
+        
+        if stream:
+            try:
+                # Get the direct URL to the video file
+                video_url = stream.url
+                title = stream.title
+                
+                # Stream the content from the direct URL to the client
+                req = urlopen(video_url)
+                
+                # Encode title for Content-Disposition header to avoid Unicode errors
+                safe_title = quote(title)
+                
+                def generate():
+                    try:
+                        while True:
+                            chunk = req.read(4096)
+                            if not chunk:
+                                break
+                            yield chunk
+                    finally:
+                        download_semaphore.release()
+
+                semaphore_released = True # Generator will handle release
+                return Response(
+                    stream_with_context(generate()),
+                    headers={
+                        "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}.mp4",
+                        "Content-Type": "video/mp4",
+                    }
+                )
+            except Exception as e:
+                sentry_sdk.capture_exception(e)
+                return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
+        else:
+            return jsonify({"error": error_message}), 500
+    finally:
+        if not semaphore_released:
+            download_semaphore.release()
 
 @app.route('/video_info', methods=['POST'])
 @require_api_key
