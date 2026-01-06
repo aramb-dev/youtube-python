@@ -234,67 +234,121 @@ def api_help():
         "api_name": "YouTube Video Downloader API",
         "authentication": {
             "header": "X-API-Key",
-            "required": True
+            "required": True,
+            "type": "Static API Key"
         },
         "endpoints": [
             {
                 "path": "/check-connection",
                 "method": "GET",
                 "description": "Public heartbeat endpoint to verify the API is live.",
-                "auth_required": False
+                "auth_required": False,
+                "response_schema": {
+                    "type": "string",
+                    "example": "200 OK - API is running!"
+                }
             },
             {
                 "path": "/video_info",
                 "method": "POST",
                 "description": "Retrieves comprehensive metadata about a YouTube video.",
-                "request_body": {
-                    "url": "string (Valid YouTube URL)"
+                "auth_required": True,
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "A valid YouTube URL (youtube.com or youtu.be)"}
+                    },
+                    "required": ["url"]
                 },
-                "auth_required": True
+                "response_schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "author": {"type": "string"},
+                        "length": {"type": "integer", "description": "Duration in seconds"},
+                        "views": {"type": "integer"},
+                        "description": {"type": "string"},
+                        "publish_date": {"type": "string", "format": "date-time"},
+                        "thumbnail_url": {"type": "string"}
+                    }
+                }
             },
             {
                 "path": "/available_resolutions",
                 "method": "POST",
                 "description": "Lists all available video resolutions for the provided URL.",
-                "request_body": {
-                    "url": "string (Valid YouTube URL)"
+                "auth_required": True,
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"}
+                    },
+                    "required": ["url"]
                 },
-                "auth_required": True
+                "response_schema": {
+                    "type": "object",
+                    "properties": {
+                        "progressive": {"type": "array", "items": {"type": "string"}, "description": "MP4 with audio (e.g., 360p, 720p)"},
+                        "all": {"type": "array", "items": {"type": "string"}, "description": "All available quality levels"}
+                    }
+                }
             },
             {
                 "path": "/download/<resolution>",
                 "method": "POST",
-                "description": "Streams the video file directly as an attachment. Note: Vercel may timeout for long videos.",
+                "description": "Streams the video file directly. Limited to 6 concurrent downloads.",
+                "auth_required": True,
                 "parameters": {
-                    "resolution": "e.g., 360p, 720p, 1080p"
+                    "resolution": {"type": "string", "example": "720p"}
                 },
-                "request_body": {
-                    "url": "string (Valid YouTube URL)"
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"}
+                    },
+                    "required": ["url"]
                 },
-                "auth_required": True
+                "response_schema": {
+                    "type": "binary",
+                    "content_type": "video/mp4"
+                }
             },
             {
                 "path": "/download_thumbnail",
                 "method": "POST",
-                "description": "Downloads the high-quality thumbnail image for the video.",
-                "request_body": {
-                    "url": "string (Valid YouTube URL)"
+                "description": "Downloads the high-quality thumbnail image.",
+                "auth_required": True,
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"}
+                    },
+                    "required": ["url"]
                 },
+                "response_schema": {
+                    "type": "binary",
+                    "content_type": "image/jpeg"
+                }
+            },
+            {
+                "path": "/debug-sentry",
+                "method": "GET",
+                "description": "Triggers a ZeroDivisionError for Sentry verification.",
                 "auth_required": True
             },
             {
                 "path": "/help",
                 "method": "GET",
-                "description": "Returns this documentation.",
-                "auth_required": True
-            },
-            {
-                "path": "/debug-sentry",
-                "method": "GET",
-                "description": "Triggers a ZeroDivisionError to verify Sentry integration.",
+                "description": "Returns this schema documentation.",
                 "auth_required": True
             }
-        ]
+        ],
+        "error_codes": {
+            "400": "Bad Request - Missing or invalid parameters.",
+            "401": "Unauthorized - Invalid or missing API Key.",
+            "503": "Service Unavailable - Concurrent download limit reached (max 6).",
+            "500": "Internal Server Error - Unexpected failure or YouTube parsing error."
+        }
     }
     return jsonify(help_data), 200
 
