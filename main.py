@@ -38,6 +38,10 @@ def get_stream_object(url, resolution):
     try:
         yt = YouTube(url, client='ANDROID')
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
+        if stream:
+            return stream, None
+        else:
+            return None, "Video with the specified resolution not found."
     except Exception as e:
         sentry_sdk.capture_exception(e)
         return None, f"({type(e).__name__}): {str(e)}"
@@ -51,10 +55,10 @@ def get_thumbnail_data(url):
         with urlopen(thumbnail_url) as response:
             image_data = response.read()
             
-                    return BytesIO(image_data), None
-                except Exception as e:
-                    sentry_sdk.capture_exception(e)
-                    return None, f"({type(e).__name__}): {str(e)}"
+        return BytesIO(image_data), None
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        return None, f"({type(e).__name__}): {str(e)}"
 def get_video_info(url):
     try:
         yt = YouTube(url, client='ANDROID')
