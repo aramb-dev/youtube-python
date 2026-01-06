@@ -51,6 +51,19 @@ def get_stream_object(url, resolution):
         sentry_sdk.capture_exception(e)
         return None, f"({type(e).__name__}): {str(e)}"
 
+def get_best_progressive_stream(url):
+    try:
+        yt = YouTube(url, client='ANDROID')
+        # Filter for progressive MP4s and order by resolution descending
+        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+        if stream:
+            return stream, None
+        else:
+            return None, "No progressive MP4 streams found for this video."
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        return None, f"({type(e).__name__}): {str(e)}"
+
 def get_thumbnail_data(url):
     try:
         yt = YouTube(url, client='ANDROID')
@@ -135,6 +148,67 @@ def download_by_resolution(resolution):
                     stream_with_context(generate()),
                     headers={
                         "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}.mp4",
+                        "Content-Type": "video/mp4",
+                    }
+                )
+            except Exception as e:
+                sentry_sdk.capture_exception(e)
+                return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
+        else:
+            return jsonify({"error": error_message}), 500
+    finally:
+        if not semaphore_released:
+            download_semaphore.release()
+
+@app.route('/download/best', methods=['POST'])
+@require_api_key
+def download_best_quality():
+    data = request.get_json()
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({"error": "Missing 'url' parameter in the request body."}), 400
+
+    if not is_valid_youtube_url(url):
+        return jsonify({"error": "Invalid YouTube URL."}), 400
+    
+    # Attempt to acquire a download slot
+    acquired = download_semaphore.acquire(blocking=True, timeout=5)
+    if not acquired:
+        return jsonify({"error": "Server busy: Too many concurrent downloads. Please try again in a minute."}), 503
+
+    semaphore_released = False
+    try:
+        stream, error_message = get_best_progressive_stream(url)
+        
+        if stream:
+            try:
+                # Get the direct URL to the video file
+                video_url = stream.url
+                title = stream.title
+                resolution = stream.resolution
+                
+                # Stream the content from the direct URL to the client
+                req = urlopen(video_url)
+                
+                # Encode title for Content-Disposition header to avoid Unicode errors
+                safe_title = quote(title)
+                
+                def generate():
+                    try:
+                        while True:
+                            chunk = req.read(4096)
+                            if not chunk:
+                                break
+                            yield chunk
+                    finally:
+                        download_semaphore.release()
+
+                semaphore_released = True # Generator will handle release
+                return Response(
+                    stream_with_context(generate()),
+                    headers={
+                        "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}_{resolution}.mp4",
                         "Content-Type": "video/mp4",
                     }
                 )
