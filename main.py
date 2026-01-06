@@ -29,10 +29,8 @@ def get_stream_object(url, resolution):
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
         if stream:
             return stream, None
-        else:
-            return None, "Video with the specified resolution not found."
     except Exception as e:
-        return None, str(e)
+        return None, f"({type(e).__name__}): {str(e)}"
 
 def get_thumbnail_data(url):
     try:
@@ -45,7 +43,7 @@ def get_thumbnail_data(url):
             
         return BytesIO(image_data), None
     except Exception as e:
-        return None, str(e)
+        return None, f"({type(e).__name__}): {str(e)}"
 
 def get_video_info(url):
     try:
@@ -61,7 +59,7 @@ def get_video_info(url):
         }
         return video_info, None
     except Exception as e:
-        return None, str(e)
+        return None, f"({type(e).__name__}): {str(e)}"
 
 def is_valid_youtube_url(url):
     # Supports youtube.com/watch?v=... and youtu.be/...
@@ -159,7 +157,7 @@ def available_resolutions():
             "all": sorted(all_resolutions)
         }), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"({type(e).__name__}): {str(e)}"}), 500
 
 @app.route('/download_thumbnail', methods=['POST'])
 @require_api_key
