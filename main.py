@@ -128,14 +128,21 @@ def stream_with_ffmpeg_merge(video_url, audio_url):
     process = subprocess.Popen(
         [
             'ffmpeg', '-y',
+            '-reconnect', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '5',
             '-i', video_url,
+            '-reconnect', '1',
+            '-reconnect_streamed', '1', 
+            '-reconnect_delay_max', '5',
             '-i', audio_url,
             '-map', '0:v:0',
             '-map', '1:a:0',
             '-c:v', 'copy',
             '-c:a', 'aac',
             '-b:a', '192k',
-            '-movflags', 'frag_keyframe+empty_moov+faststart',
+            '-shortest',
+            '-movflags', 'frag_keyframe+empty_moov',
             '-f', 'mp4',
             'pipe:1'
         ],
@@ -144,12 +151,11 @@ def stream_with_ffmpeg_merge(video_url, audio_url):
     )
     try:
         while True:
-            chunk = process.stdout.read(4096)
+            chunk = process.stdout.read(8192)
             if not chunk:
                 break
             yield chunk
     finally:
-        process.terminate()
         process.wait()
 
 @app.route('/download/<resolution>', methods=['POST'])
@@ -356,9 +362,15 @@ def available_resolutions():
             for stream in yt.streams.filter(file_extension='mp4')
             if stream.resolution
         ]))
+        # Get audio streams info
+        audio_streams = yt.streams.filter(adaptive=True, only_audio=True)
+        audio_info = [{"abr": s.abr, "mime": s.mime_type, "ext": s.subtype} for s in audio_streams]
+        
         return jsonify({
             "progressive": sorted(progressive_resolutions),
-            "all": sorted(all_resolutions)
+            "all": sorted(all_resolutions),
+            "audio_streams": audio_info,
+            "ffmpeg_available": FFMPEG_AVAILABLE
         }), 200
     except Exception as e:
         sentry_sdk.capture_exception(e)
