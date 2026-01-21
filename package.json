@@ -9,6 +9,6 @@
   },
   "dependencies": {
     "mediabunny": "latest",
-    "youtubei.js": "^13.0.0"
+    "youtubei.js": "^16.0.1"
   }
 }

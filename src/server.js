@@ -185,6 +185,14 @@ function filterByContainer(formats, container) {
   return formats;
 }
 
+const FALLBACK_HEADERS = {
+  accept: '*/*',
+  origin: 'https://www.youtube.com',
+  referer: 'https://www.youtube.com',
+  DNT: '1',
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+};
+
 function getRawFormats(info) {
   const streamingData = info.streaming_data || info.streamingData || {};
   return [
@@ -385,7 +393,7 @@ async function safeUnlink(filePath) {
 async function downloadToTempFile(info, format) {
   const ext = extensionFromMime(format?.mime_type || format?.mimeType);
   const filePath = createTempPath(ext);
-  const stream = toWebStream(await info.download(format));
+  const stream = toWebStream(await downloadStream(info, format));
   await Bun.write(filePath, stream);
   return filePath;
 }
@@ -412,6 +420,36 @@ function fileStreamWithCleanup(filePath) {
       return safeUnlink(filePath);
     }
   });
+}
+
+async function manualFormatFetch(format, info) {
+  const player = info.actions?.session?.player;
+  const url = format?.decipher ? format.decipher(player) : format?.url;
+  if (!url) {
+    throw new Error('No valid URL to decipher');
+  }
+
+  const response = await fetch(url, {
+    headers: FALLBACK_HEADERS
+  });
+  if (!response.ok) {
+    throw new Error(`Manual fetch failed (${response.status})`);
+  }
+  if (!response.body) {
+    throw new Error('Manual fetch returned no body');
+  }
+
+  return response.body;
+}
+
+async function downloadStream(info, format) {
+  try {
+    return await info.download(format);
+  } catch (error) {
+    console.warn('Download retry with manual fetch', { itag: format?.itag, reason: error?.message });
+  }
+
+  return manualFormatFetch(format, info);
 }
 
 async function streamMergedDownload(info, videoFormat, audioFormat, container) {
@@ -458,8 +496,8 @@ async function streamMergedDownload(info, videoFormat, audioFormat, container) {
           source: new FilePathSource(audioTempPath)
         });
       } else {
-        const videoStream = toWebStream(await info.download(videoFormat));
-        const audioStream = toWebStream(await info.download(audioFormat));
+        const videoStream = toWebStream(await downloadStream(info, videoFormat));
+        const audioStream = toWebStream(await downloadStream(info, audioFormat));
 
         videoInput = new Input({
           formats: ALL_FORMATS,
@@ -601,7 +639,7 @@ async function handleDownload(url) {
       if (container === 'mp4') {
         const muxed = selectBestMuxedFormat(rawFormats, { quality, container });
         if (muxed) {
-          const stream = await info.download({ itag: muxed.itag });
+          const stream = await downloadStream(info, muxed);
           const mimeType = muxed.mime_type || muxed.mimeType || 'application/octet-stream';
           const ext = extensionFromMime(mimeType);
           const filename = info.basic_info?.title || 'video';
@@ -659,15 +697,7 @@ async function handleDownload(url) {
     return badRequest('No matching format found.');
   }
 
-  let stream;
-  try {
-    stream = await info.download(chosen);
-  } catch (error) {
-    const fallback = itag
-      ? { itag: Number(itag) }
-      : { quality: quality || 'best', type };
-    stream = await info.download(fallback);
-  }
+  const stream = await downloadStream(info, chosen);
   const mimeType = chosen.mime_type || chosen.mimeType || 'application/octet-stream';
   const ext = extensionFromMime(mimeType);
   const filename = info.basic_info?.title || 'video';
