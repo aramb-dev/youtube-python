@@ -5,10 +5,14 @@ import ssl
 import os
 import sentry_sdk
 import threading
+import subprocess
+import shutil
 from io import BytesIO
 from urllib.request import urlopen
 from urllib.parse import quote
 from functools import wraps
+
+FFMPEG_AVAILABLE = shutil.which('ffmpeg') is not None
 
 # Initialize Sentry
 sentry_sdk.init(
@@ -23,6 +27,7 @@ sentry_sdk.init(
 ssl._create_default_https_context = ssl._create_unverified_context
 
 app = Flask(__name__)
+app.json.ensure_ascii = False
 
 # Rate limiting: Max 6 simultaneous downloads
 download_semaphore = threading.BoundedSemaphore(value=6)
@@ -42,27 +47,40 @@ def require_api_key(f):
 def get_stream_object(url, resolution):
     try:
         yt = YouTube(url, client='ANDROID')
+        # Try progressive first (has audio)
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
         if stream:
-            return stream, None
-        else:
-            return None, "Video with the specified resolution not found."
+            return stream, None, None
+        
+        # Fall back to adaptive (video-only, needs audio merge)
+        video_stream = yt.streams.filter(adaptive=True, file_extension='mp4', resolution=resolution).first()
+        if video_stream:
+            audio_stream = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
+            return video_stream, None, audio_stream
+        
+        return None, "Video with the specified resolution not found.", None
     except Exception as e:
         sentry_sdk.capture_exception(e)
-        return None, f"({type(e).__name__}): {str(e)}"
+        return None, f"({type(e).__name__}): {str(e)}", None
 
-def get_best_progressive_stream(url):
+def get_best_stream(url):
     try:
         yt = YouTube(url, client='ANDROID')
-        # Filter for progressive MP4s and order by resolution descending
+        # Try progressive first (has audio)
         stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
         if stream:
-            return stream, None
-        else:
-            return None, "No progressive MP4 streams found for this video."
+            return stream, None, None
+        
+        # Fall back to best adaptive (video-only, needs audio merge)
+        video_stream = yt.streams.filter(adaptive=True, file_extension='mp4').order_by('resolution').desc().first()
+        if video_stream:
+            audio_stream = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
+            return video_stream, None, audio_stream
+        
+        return None, "No MP4 streams found for this video.", None
     except Exception as e:
         sentry_sdk.capture_exception(e)
-        return None, f"({type(e).__name__}): {str(e)}"
+        return None, f"({type(e).__name__}): {str(e)}", None
 
 def get_thumbnail_data(url):
     try:
@@ -99,6 +117,32 @@ def is_valid_youtube_url(url):
     pattern = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w-]+([?&]\S*)?$"
     return re.match(pattern, url) is not None
 
+def stream_with_ffmpeg_merge(video_url, audio_url):
+    """Merge video and audio streams using ffmpeg and yield chunks."""
+    process = subprocess.Popen(
+        [
+            'ffmpeg', '-y',
+            '-i', video_url,
+            '-i', audio_url,
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-movflags', 'frag_keyframe+empty_moov',
+            '-f', 'mp4',
+            'pipe:1'
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL
+    )
+    try:
+        while True:
+            chunk = process.stdout.read(4096)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        process.terminate()
+        process.wait()
+
 @app.route('/download/<resolution>', methods=['POST'])
 @require_api_key
 def download_by_resolution(resolution):
@@ -119,38 +163,57 @@ def download_by_resolution(resolution):
     # Ensure release happens even if get_stream_object or urlopen fails
     semaphore_released = False
     try:
-        stream, error_message = get_stream_object(url, resolution)
+        stream, error_message, audio_stream = get_stream_object(url, resolution)
         
         if stream:
             try:
-                # Get the direct URL to the video file
                 video_url = stream.url
                 title = stream.title
-                
-                # Stream the content from the direct URL to the client
-                req = urlopen(video_url)
-                
-                # Encode title for Content-Disposition header to avoid Unicode errors
                 safe_title = quote(title)
                 
-                def generate():
-                    try:
-                        while True:
-                            chunk = req.read(4096)
-                            if not chunk:
-                                break
-                            yield chunk
-                    finally:
-                        download_semaphore.release()
+                # Check if this is an adaptive stream (needs audio merge)
+                if audio_stream:
+                    if not FFMPEG_AVAILABLE:
+                        return jsonify({"error": "This resolution requires ffmpeg for audio merging. Install ffmpeg or use a progressive resolution (360p/720p)."}), 500
+                    
+                    audio_url = audio_stream.url
+                    
+                    def generate():
+                        try:
+                            yield from stream_with_ffmpeg_merge(video_url, audio_url)
+                        finally:
+                            download_semaphore.release()
+                    
+                    semaphore_released = True
+                    return Response(
+                        stream_with_context(generate()),
+                        headers={
+                            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}_{resolution}.mp4",
+                            "Content-Type": "video/mp4",
+                        }
+                    )
+                else:
+                    # Progressive stream - direct streaming
+                    req = urlopen(video_url)
+                    
+                    def generate():
+                        try:
+                            while True:
+                                chunk = req.read(4096)
+                                if not chunk:
+                                    break
+                                yield chunk
+                        finally:
+                            download_semaphore.release()
 
-                semaphore_released = True # Generator will handle release
-                return Response(
-                    stream_with_context(generate()),
-                    headers={
-                        "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}.mp4",
-                        "Content-Type": "video/mp4",
-                    }
-                )
+                    semaphore_released = True
+                    return Response(
+                        stream_with_context(generate()),
+                        headers={
+                            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}.mp4",
+                            "Content-Type": "video/mp4",
+                        }
+                    )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
                 return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
@@ -179,39 +242,58 @@ def download_best_quality():
 
     semaphore_released = False
     try:
-        stream, error_message = get_best_progressive_stream(url)
+        stream, error_message, audio_stream = get_best_stream(url)
         
         if stream:
             try:
-                # Get the direct URL to the video file
                 video_url = stream.url
                 title = stream.title
                 resolution = stream.resolution
-                
-                # Stream the content from the direct URL to the client
-                req = urlopen(video_url)
-                
-                # Encode title for Content-Disposition header to avoid Unicode errors
                 safe_title = quote(title)
                 
-                def generate():
-                    try:
-                        while True:
-                            chunk = req.read(4096)
-                            if not chunk:
-                                break
-                            yield chunk
-                    finally:
-                        download_semaphore.release()
+                # Check if this is an adaptive stream (needs audio merge)
+                if audio_stream:
+                    if not FFMPEG_AVAILABLE:
+                        return jsonify({"error": "Best quality requires ffmpeg for audio merging. Install ffmpeg or use /download/720p."}), 500
+                    
+                    audio_url = audio_stream.url
+                    
+                    def generate():
+                        try:
+                            yield from stream_with_ffmpeg_merge(video_url, audio_url)
+                        finally:
+                            download_semaphore.release()
+                    
+                    semaphore_released = True
+                    return Response(
+                        stream_with_context(generate()),
+                        headers={
+                            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}_{resolution}.mp4",
+                            "Content-Type": "video/mp4",
+                        }
+                    )
+                else:
+                    # Progressive stream - direct streaming
+                    req = urlopen(video_url)
+                    
+                    def generate():
+                        try:
+                            while True:
+                                chunk = req.read(4096)
+                                if not chunk:
+                                    break
+                                yield chunk
+                        finally:
+                            download_semaphore.release()
 
-                semaphore_released = True # Generator will handle release
-                return Response(
-                    stream_with_context(generate()),
-                    headers={
-                        "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}_{resolution}.mp4",
-                        "Content-Type": "video/mp4",
-                    }
-                )
+                    semaphore_released = True
+                    return Response(
+                        stream_with_context(generate()),
+                        headers={
+                            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_title}_{resolution}.mp4",
+                            "Content-Type": "video/mp4",
+                        }
+                    )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
                 return jsonify({"error": f"Error streaming video: {str(e)}"}), 500
