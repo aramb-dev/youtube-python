@@ -44,9 +44,35 @@ def require_api_key(f):
             return jsonify({"error": "Unauthorized: Invalid or missing API Key."}), 401
     return decorated_function
 
+# Client fallback order for bot detection
+CLIENTS = ['WEB', 'TV_EMBED', 'IOS', 'ANDROID']
+
+def get_youtube_object(url):
+    """Try multiple clients to avoid bot detection."""
+    from pytubefix.exceptions import BotDetection
+    last_error = None
+    for client in CLIENTS:
+        try:
+            yt = YouTube(url, client=client)
+            # Test access by checking streams
+            _ = yt.streams
+            return yt, None
+        except BotDetection as e:
+            last_error = e
+            sentry_sdk.capture_exception(e)
+            continue
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
+            return None, f"({type(e).__name__}): {str(e)}"
+    sentry_sdk.capture_message(f"Bot detected on all clients for URL: {url}")
+    return None, f"Bot detected on all clients. {str(last_error)}"
+
 def get_stream_object(url, resolution):
+    yt, error = get_youtube_object(url)
+    if not yt:
+        return None, error, None
+    
     try:
-        yt = YouTube(url, client='WEB')
         # Try progressive first (has audio)
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
         if stream:
@@ -67,8 +93,11 @@ def get_stream_object(url, resolution):
         return None, f"({type(e).__name__}): {str(e)}", None
 
 def get_best_stream(url):
+    yt, error = get_youtube_object(url)
+    if not yt:
+        return None, error, None
+    
     try:
-        yt = YouTube(url, client='WEB')
         # Try progressive first (has audio)
         stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
         if stream:
@@ -89,8 +118,11 @@ def get_best_stream(url):
         return None, f"({type(e).__name__}): {str(e)}", None
 
 def get_thumbnail_data(url):
+    yt, error = get_youtube_object(url)
+    if not yt:
+        return None, error
+    
     try:
-        yt = YouTube(url, client='WEB')
         thumbnail_url = yt.thumbnail_url
         
         # Fetch the image data
@@ -102,8 +134,11 @@ def get_thumbnail_data(url):
         sentry_sdk.capture_exception(e)
         return None, f"({type(e).__name__}): {str(e)}"
 def get_video_info(url):
+    yt, error = get_youtube_object(url)
+    if not yt:
+        return None, error
+    
     try:
-        yt = YouTube(url, client='WEB')
         video_info = {
             "title": yt.title,
             "author": yt.author,
@@ -350,8 +385,11 @@ def available_resolutions():
     if not is_valid_youtube_url(url):
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
+    yt, error = get_youtube_object(url)
+    if not yt:
+        return jsonify({"error": error}), 500
+    
     try:
-        yt = YouTube(url, client='WEB')
         progressive_resolutions = list(set([
             stream.resolution 
             for stream in yt.streams.filter(progressive=True, file_extension='mp4')
