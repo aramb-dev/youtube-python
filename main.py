@@ -46,7 +46,7 @@ def require_api_key(f):
 
 def get_stream_object(url, resolution):
     try:
-        yt = YouTube(url, client='ANDROID')
+        yt = YouTube(url, client='WEB')
         # Try progressive first (has audio)
         stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
         if stream:
@@ -68,7 +68,7 @@ def get_stream_object(url, resolution):
 
 def get_best_stream(url):
     try:
-        yt = YouTube(url, client='ANDROID')
+        yt = YouTube(url, client='WEB')
         # Try progressive first (has audio)
         stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
         if stream:
@@ -90,7 +90,7 @@ def get_best_stream(url):
 
 def get_thumbnail_data(url):
     try:
-        yt = YouTube(url, client='ANDROID')
+        yt = YouTube(url, client='WEB')
         thumbnail_url = yt.thumbnail_url
         
         # Fetch the image data
@@ -103,7 +103,7 @@ def get_thumbnail_data(url):
         return None, f"({type(e).__name__}): {str(e)}"
 def get_video_info(url):
     try:
-        yt = YouTube(url, client='ANDROID')
+        yt = YouTube(url, client='WEB')
         video_info = {
             "title": yt.title,
             "author": yt.author,
@@ -345,7 +345,7 @@ def available_resolutions():
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
     try:
-        yt = YouTube(url, client='ANDROID')
+        yt = YouTube(url, client='WEB')
         progressive_resolutions = list(set([
             stream.resolution 
             for stream in yt.streams.filter(progressive=True, file_extension='mp4')
