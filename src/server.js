@@ -1,9 +1,15 @@
 import { Innertube } from 'youtubei.js';
+import { randomUUID } from 'node:crypto';
+import { unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   ALL_FORMATS,
   EncodedAudioPacketSource,
   EncodedPacketSink,
   EncodedVideoPacketSource,
+  FilePathSource,
+  FilePathTarget,
   Input,
   MkvOutputFormat,
   Mp4OutputFormat,
@@ -131,9 +137,22 @@ function formatMime(format) {
   return (format?.mime_type || format?.mimeType || '').split(';')[0].trim().toLowerCase();
 }
 
-function chooseOutputFormat(videoFormat, audioFormat, container) {
+function isDownloadableFormat(format) {
+  return Boolean(
+    format?.url ||
+    format?.signature_cipher ||
+    format?.signatureCipher ||
+    format?.cipher
+  );
+}
+
+function isDrmFormat(format) {
+  return Boolean(format?.drm_families || format?.drm_track_type || format?.fair_play_key_uri);
+}
+
+function chooseOutputFormat(videoFormat, audioFormat, container, streaming) {
   if (container === 'mp4') {
-    return new Mp4OutputFormat({ fastStart: 'fragmented' });
+    return streaming ? new Mp4OutputFormat({ fastStart: 'fragmented' }) : new Mp4OutputFormat();
   }
 
   if (container === 'webm') {
@@ -254,7 +273,8 @@ function selectFormat(rawFormats, { itag, quality, type }) {
 }
 
 function selectBestVideoFormat(rawFormats, { quality, itag, container }) {
-  const filtered = filterByContainer(rawFormats, container);
+  const filtered = filterByContainer(rawFormats, container)
+    .filter((format) => isDownloadableFormat(format) && !isDrmFormat(format));
 
   if (itag) {
     const match = filtered.find((format) => format.itag === Number(itag));
@@ -283,7 +303,8 @@ function selectBestVideoFormat(rawFormats, { quality, itag, container }) {
 }
 
 function selectBestAudioFormat(rawFormats, { itag, container }) {
-  const filtered = filterByContainer(rawFormats, container);
+  const filtered = filterByContainer(rawFormats, container)
+    .filter((format) => isDownloadableFormat(format) && !isDrmFormat(format));
 
   if (itag) {
     const match = filtered.find((format) => format.itag === Number(itag));
@@ -330,33 +351,109 @@ function resolvePublicFile(pathname) {
   return fileUrl;
 }
 
-async function streamMergedDownload(info, videoFormat, audioFormat, container) {
-  const outputFormat = chooseOutputFormat(videoFormat, audioFormat, container);
-  const { readable, writable } = new TransformStream({
-    transform(chunk, controller) {
-      controller.enqueue(chunk.data);
+function createTempPath(extension) {
+  const suffix = extension ? `.${extension}` : '';
+  return join(tmpdir(), `yt-merge-${randomUUID()}${suffix}`);
+}
+
+async function safeUnlink(filePath) {
+  if (!filePath) return;
+  try {
+    await unlink(filePath);
+  } catch {
+    // ignore
+  }
+}
+
+async function downloadToTempFile(info, format) {
+  const ext = extensionFromMime(format?.mime_type || format?.mimeType);
+  const filePath = createTempPath(ext);
+  const stream = toWebStream(await info.download(format));
+  await Bun.write(filePath, stream);
+  return filePath;
+}
+
+function fileStreamWithCleanup(filePath) {
+  const fileStream = Bun.file(filePath).stream();
+  return new ReadableStream({
+    async start(controller) {
+      const reader = fileStream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) controller.enqueue(value);
+        }
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        await safeUnlink(filePath);
+      }
+    },
+    cancel() {
+      return safeUnlink(filePath);
     }
   });
+}
+
+async function streamMergedDownload(info, videoFormat, audioFormat, container) {
+  const useTempFiles = container === 'mp4';
+  const outputFormat = chooseOutputFormat(videoFormat, audioFormat, container, !useTempFiles);
+  let readable;
+  let writable;
+  let outputFilePath;
+
+  if (useTempFiles) {
+    outputFilePath = createTempPath(outputFormat.fileExtension);
+  } else {
+    ({ readable, writable } = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.data);
+      }
+    }));
+  }
 
   const output = new Output({
     format: outputFormat,
-    target: new StreamTarget(writable)
+    target: useTempFiles ? new FilePathTarget(outputFilePath) : new StreamTarget(writable)
   });
 
   const process = (async () => {
-    const videoStream = toWebStream(await info.download(videoFormat));
-    const audioStream = toWebStream(await info.download(audioFormat));
-
-    const videoInput = new Input({
-      formats: ALL_FORMATS,
-      source: new ReadableStreamSource(videoStream)
-    });
-    const audioInput = new Input({
-      formats: ALL_FORMATS,
-      source: new ReadableStreamSource(audioStream)
-    });
+    let videoInput;
+    let audioInput;
+    let videoTempPath;
+    let audioTempPath;
 
     try {
+      if (useTempFiles) {
+        [videoTempPath, audioTempPath] = await Promise.all([
+          downloadToTempFile(info, videoFormat),
+          downloadToTempFile(info, audioFormat)
+        ]);
+
+        videoInput = new Input({
+          formats: ALL_FORMATS,
+          source: new FilePathSource(videoTempPath)
+        });
+        audioInput = new Input({
+          formats: ALL_FORMATS,
+          source: new FilePathSource(audioTempPath)
+        });
+      } else {
+        const videoStream = toWebStream(await info.download(videoFormat));
+        const audioStream = toWebStream(await info.download(audioFormat));
+
+        videoInput = new Input({
+          formats: ALL_FORMATS,
+          source: new ReadableStreamSource(videoStream)
+        });
+        audioInput = new Input({
+          formats: ALL_FORMATS,
+          source: new ReadableStreamSource(audioStream)
+        });
+      }
+
       const videoTrack = await videoInput.getPrimaryVideoTrack();
       const audioTrack = await audioInput.getPrimaryAudioTrack();
 
@@ -402,10 +499,21 @@ async function streamMergedDownload(info, videoFormat, audioFormat, container) {
 
       await output.finalize();
     } finally {
-      videoInput.dispose();
-      audioInput.dispose();
+      videoInput?.dispose();
+      audioInput?.dispose();
+      await safeUnlink(videoTempPath);
+      await safeUnlink(audioTempPath);
     }
   })();
+
+  if (useTempFiles) {
+    await process;
+    return {
+      stream: fileStreamWithCleanup(outputFilePath),
+      mimeType: outputFormat.mimeType,
+      ext: outputFormat.fileExtension
+    };
+  }
 
   process.catch(async (error) => {
     try {
