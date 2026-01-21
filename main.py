@@ -55,7 +55,10 @@ def get_stream_object(url, resolution):
         # Fall back to adaptive (video-only, needs audio merge)
         video_stream = yt.streams.filter(adaptive=True, file_extension='mp4', resolution=resolution).first()
         if video_stream:
-            audio_stream = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
+            # Prefer m4a/mp4 audio, fall back to webm if needed
+            audio_stream = yt.streams.filter(adaptive=True, only_audio=True, file_extension='mp4').order_by('abr').desc().first()
+            if not audio_stream:
+                audio_stream = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
             return video_stream, None, audio_stream
         
         return None, "Video with the specified resolution not found.", None
@@ -74,7 +77,10 @@ def get_best_stream(url):
         # Fall back to best adaptive (video-only, needs audio merge)
         video_stream = yt.streams.filter(adaptive=True, file_extension='mp4').order_by('resolution').desc().first()
         if video_stream:
-            audio_stream = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
+            # Prefer m4a/mp4 audio, fall back to webm if needed
+            audio_stream = yt.streams.filter(adaptive=True, only_audio=True, file_extension='mp4').order_by('abr').desc().first()
+            if not audio_stream:
+                audio_stream = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
             return video_stream, None, audio_stream
         
         return None, "No MP4 streams found for this video.", None
@@ -124,14 +130,17 @@ def stream_with_ffmpeg_merge(video_url, audio_url):
             'ffmpeg', '-y',
             '-i', video_url,
             '-i', audio_url,
+            '-map', '0:v:0',
+            '-map', '1:a:0',
             '-c:v', 'copy',
             '-c:a', 'aac',
-            '-movflags', 'frag_keyframe+empty_moov',
+            '-b:a', '192k',
+            '-movflags', 'frag_keyframe+empty_moov+faststart',
             '-f', 'mp4',
             'pipe:1'
         ],
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.PIPE
     )
     try:
         while True:

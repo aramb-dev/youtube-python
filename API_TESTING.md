@@ -4,7 +4,7 @@
 
 ```bash
 # Base URL (change if deployed elsewhere)
-BASE_URL="http://localhost:5000"
+BASE_URL="https://yt.ezaalah.com"
 
 # API Key (from environment or default)
 API_KEY="X-eGKp0yitrTNE4LXilSo_9zsDbOcwcqgj7qLTkhVT0"
