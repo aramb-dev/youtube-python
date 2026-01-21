@@ -1,0 +1,14 @@
+{
+  "name": "youtube-video-downloader-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.js",
+    "start": "bun src/server.js"
+  },
+  "dependencies": {
+    "mediabunny": "latest",
+    "youtubei.js": "^13.0.0"
+  }
+}

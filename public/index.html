@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TapeDeck — YouTube Downloader</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="grain"></div>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">TapeDeck / Studio Capture</p>
+        <h1>Download YouTube in one clean pass.</h1>
+        <p class="lede">
+          Drop a link, pick a format, and pull the file directly from your own
+          server. Built on Bun + YouTube.js.
+        </p>
+      </header>
+
+      <section class="panel">
+        <form id="lookup-form" class="lookup">
+          <label for="video-url">YouTube URL or ID</label>
+          <div class="input-row">
+            <input
+              id="video-url"
+              name="video-url"
+              type="text"
+              placeholder="https://www.youtube.com/watch?v=..."
+              autocomplete="off"
+              required
+            />
+            <button type="submit">Fetch formats</button>
+          </div>
+        </form>
+
+        <div id="status" class="status" aria-live="polite"></div>
+
+        <div id="video-card" class="video-card hidden">
+          <img id="thumb" alt="Video thumbnail" />
+          <div class="video-meta">
+            <h2 id="title"></h2>
+            <p id="meta"></p>
+            <div class="actions">
+              <button id="quick-download" class="ghost" type="button">
+                Quick download (merged)
+              </button>
+              <button id="copy-link" class="ghost" type="button">
+                Copy download API
+              </button>
+            </div>
+            <p class="hint">Merged downloads mux best video + audio into MP4 when available.</p>
+          </div>
+        </div>
+
+        <div class="formats">
+          <div class="formats-head">
+            <h3>Available formats</h3>
+            <div class="legend">
+              <span>Video</span>
+              <span>Audio</span>
+              <span>Size</span>
+            </div>
+          </div>
+          <ul id="formats" class="formats-list"></ul>
+        </div>
+      </section>
+
+      <section class="panel api-panel">
+        <h3>API endpoints</h3>
+        <div class="api-grid">
+          <div>
+            <h4>GET /api/info</h4>
+            <p>Return metadata + format list.</p>
+            <code>/api/info?url=VIDEO_URL</code>
+          </div>
+          <div>
+            <h4>GET /api/download</h4>
+            <p>Stream a specific format.</p>
+            <code>/api/download?url=VIDEO_URL&amp;itag=ITAG</code>
+            <code>/api/download?url=VIDEO_URL&amp;merge=1&amp;container=mp4</code>
+          </div>
+          <div>
+            <h4>GET /api/health</h4>
+            <p>Basic uptime check.</p>
+            <code>/api/health</code>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Built for fast fetches.</span>
+      <span>Keep it local.</span>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
