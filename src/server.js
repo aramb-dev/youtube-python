@@ -322,6 +322,23 @@ function selectBestAudioFormat(rawFormats, { itag, container }) {
   return candidates[0];
 }
 
+function selectBestMuxedFormat(rawFormats, { quality, container }) {
+  const filtered = filterByContainer(rawFormats, container)
+    .filter((format) => hasVideo(format) && hasAudio(format))
+    .filter((format) => isDownloadableFormat(format) && !isDrmFormat(format));
+
+  if (quality) {
+    const desired = quality.toLowerCase();
+    const match = filtered.find((format) => {
+      const label = format.quality_label || format.qualityLabel || format.quality;
+      return label && label.toLowerCase() === desired;
+    });
+    if (match) return match;
+  }
+
+  return filtered.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+}
+
 function toWebStream(stream) {
   if (!stream) return stream;
   if (typeof stream.getReader === 'function') return stream;
