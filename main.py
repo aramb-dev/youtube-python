@@ -48,8 +48,8 @@ def require_api_key(f):
 CLIENTS = ['WEB', 'TV_EMBED', 'IOS', 'ANDROID']
 
 def get_youtube_object(url):
-    """Try multiple clients to avoid bot detection."""
-    from pytubefix.exceptions import BotDetection
+    """Try multiple clients to avoid bot detection and other errors."""
+    from pytubefix import exceptions as yt_exceptions
     last_error = None
     for client in CLIENTS:
         try:
@@ -57,15 +57,15 @@ def get_youtube_object(url):
             # Test access by checking streams
             _ = yt.streams
             return yt, None
-        except BotDetection as e:
+        except (yt_exceptions.BotDetection, yt_exceptions.UnknownVideoError) as e:
             last_error = e
             sentry_sdk.capture_exception(e)
             continue
         except Exception as e:
             sentry_sdk.capture_exception(e)
             return None, f"({type(e).__name__}): {str(e)}"
-    sentry_sdk.capture_message(f"Bot detected on all clients for URL: {url}")
-    return None, f"Bot detected on all clients. {str(last_error)}"
+    sentry_sdk.capture_message(f"All clients failed for URL: {url}")
+    return None, f"All clients failed. Last error: {str(last_error)}"
 
 def get_stream_object(url, resolution):
     yt, error = get_youtube_object(url)
