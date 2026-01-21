@@ -30,3 +30,4 @@ curl -L "http://localhost:3000/api/download?url=https://www.youtube.com/watch?v=
 - If a download fails, retry with a different format or remove the `itag` to let the server pick a best match.
 - For merged output, use `video_itag` and `audio_itag` if you want to lock specific streams.
 - Use `container=webm` if you prefer WebM output.
+- If MP4 audio/video streams are unavailable, the server falls back to the best combined MP4 stream.

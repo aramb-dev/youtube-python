@@ -33,3 +33,4 @@ Server starts on `http://localhost:3000`.
 - Use the `itag` from `/api/info` to select a specific format.
 - Merged downloads use mediabunny to mux the best video-only + audio-only formats.
 - Default merged container is `mp4`; use `container=webm` if you want WebM.
+- If no separate MP4 streams exist, the server falls back to the best combined MP4 stream.

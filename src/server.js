@@ -598,6 +598,26 @@ async function handleDownload(url) {
     const audioFormat = selectBestAudioFormat(rawFormats, { itag: audioItag, container });
 
     if (!videoFormat || !audioFormat) {
+      if (container === 'mp4') {
+        const muxed = selectBestMuxedFormat(rawFormats, { quality, container });
+        if (muxed) {
+          const stream = await info.download({ itag: muxed.itag });
+          const mimeType = muxed.mime_type || muxed.mimeType || 'application/octet-stream';
+          const ext = extensionFromMime(mimeType);
+          const filename = info.basic_info?.title || 'video';
+          const contentLength = muxed.content_length || muxed.contentLength;
+          const headers = new Headers({
+            'content-type': mimeType,
+            'content-disposition': contentDisposition(filename, ext),
+            'cache-control': 'no-store'
+          });
+          if (contentLength) {
+            headers.set('content-length', String(contentLength));
+          }
+          return new Response(toWebStream(stream), { headers });
+        }
+      }
+
       return badRequest(`Unable to select ${container} video + audio formats for merge.`);
     }
 
