@@ -1,22 +1,25 @@
-# Task: YouTube Video Downloader API
+# YouTube Video Downloader API Implementation
 
-Create a working YouTube video downloader API with a web frontend that allows users to:
+Implement a high-quality YouTube video downloader using Next.js, Bun, youtubei.js, and Mediabunny.
 
-1. Search and retrieve video information (title, duration, available formats)
-2. Download YouTube videos in various formats
-3. Use a simple, clean web interface for downloads
+## Objective
+Build a web-based tool that fetches YouTube video metadata and allows users to download videos in various qualities, including 1080p+ by merging DASH streams server-side.
 
-## Requirements
+## Key Requirements
+- **Metadata Retrieval**: Use `youtubei.js` to fetch video title, thumbnail, and stream formats.
+- **High-Quality Downloads**: Implement server-side muxing of separate video/audio DASH streams using `Mediabunny`.
+- **Streaming Response**: Stream final files directly to the user's browser.
+- **Frontend**: A clean Next.js (App Router) interface with loading states.
+- **Environment**: Optimized for Bun runtime and Railway deployment.
 
-- Use Bun as the runtime environment
-- Implement API endpoints for video info and downloads
-- Support multiple video formats where possible
-- Stream downloads (no disk storage)
-- Include a frontend interface
-- Handle errors gracefully
+## Acceptance Criteria
+- Users can enter a YouTube URL and see video details.
+- Download buttons work for both combined (e.g., 720p) and DASH (e.g., 1080p) formats.
+- DASH downloads successfully merge video and audio into a playable MP4.
+- Temporary files in `/tmp` are cleaned up after every download.
+- No external binary dependencies (like FFmpeg) are required for core functionality.
 
-## Constraints
-
-- Work within YouTube's limitations (bot protection for adaptive streams)
-- Support only downloadable formats (combined video+audio streams work best)
-- Keep the implementation simple and maintainable
+## Reference
+Refer to the detailed design and implementation plan for step-by-step guidance:
+- Design: `.sop/planning/design/detailed-design.md`
+- Implementation Plan: `.sop/planning/implementation/plan.md`
