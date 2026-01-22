@@ -22,15 +22,28 @@ Server starts on `http://localhost:3000`.
 
 ## API
 
-- `GET /api/health`
+### Health Check
+- `GET /api/health` - Returns `{ ok: true }`
+
+### Video Info
 - `GET /api/info?url=VIDEO_URL`
-- `GET /api/download?url=VIDEO_URL&itag=ITAG`
-- `GET /api/download?url=VIDEO_URL&merge=1&container=mp4`
+  
+Returns video metadata and available formats. Each format includes:
+- `downloadable: true/false` - Whether the format can be downloaded
+- `type: 'video+audio' | 'video' | 'audio'` - Format type
+
+### Download
+- `GET /api/download?url=VIDEO_URL` - Download combined video+audio (360p MP4)
+- `GET /api/download?url=VIDEO_URL&itag=18` - Download specific format by itag
+
+## Limitations
+
+⚠️ **Video-only and audio-only downloads are not supported** due to YouTube's bot protection (BotGuard/po_token). Only combined video+audio formats (like itag 18) can be downloaded.
+
+For separate video and audio streams, consider using [yt-dlp](https://github.com/yt-dlp/yt-dlp) which has more sophisticated anti-bot circumvention.
 
 ## Notes
 
 - The downloader streams directly; no files are stored on disk.
 - Use the `itag` from `/api/info` to select a specific format.
-- Merged downloads use mediabunny to mux the best video-only + audio-only formats.
-- Default merged container is `mp4`; use `container=webm` if you want WebM.
-- If no separate MP4 streams exist, the server falls back to the best combined MP4 stream.
+- Only formats marked as `downloadable: true` in `/api/info` will work with `/api/download`.

@@ -1,18 +1,35 @@
-import { Innertube } from 'youtubei.js';
+import { Innertube, Platform } from 'youtubei.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const publicDirUrl = new URL('../public/', import.meta.url);
 
-// Create Innertube with a JavaScript interpreter for URL deciphering
+// Set up the JavaScript interpreter for URL deciphering BEFORE creating Innertube
+Platform.shim.eval = async (data, env) => {
+  const properties = [];
+  
+  if (env.n) {
+    properties.push(`n: exportedVars.nFunction("${env.n}")`);
+  }
+  
+  if (env.sig) {
+    properties.push(`sig: exportedVars.sigFunction("${env.sig}")`);
+  }
+  
+  const code = `${data.output}\nreturn { ${properties.join(', ')} }`;
+  
+  try {
+    return new Function(code)();
+  } catch (e) {
+    console.error('Platform.shim.eval error:', e.message);
+    throw e;
+  }
+};
+
+// Create Innertube - WEB client with proper player retrieval
 const yt = await Innertube.create({
   retrieve_player: true,
   generate_session_locally: true
 });
-
-// Provide the JS interpreter for deciphering signatures
-yt.session.player.evaluate = (code) => {
-  return eval(code);
-};
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -85,13 +102,26 @@ function hasAudio(format) {
 }
 
 function normalizeFormat(format) {
+  const isVideo = hasVideo(format);
+  const isAudio = hasAudio(format);
+  const isCombined = isVideo && isAudio;
+  
   return {
     itag: format.itag,
     mimeType: format.mime_type || format.mimeType,
     qualityLabel: format.quality_label || format.qualityLabel || format.quality,
     bitrate: format.bitrate,
-    hasVideo: hasVideo(format),
-    hasAudio: hasAudio(format),
+    hasVideo: isVideo,
+    hasAudio: isAudio,
+    // Categorize the format type
+    type: isCombined ? 'video+audio' : (isVideo ? 'video' : 'audio'),
+    // Only combined formats are downloadable due to YouTube bot protection
+    downloadable: isCombined,
+    // Additional useful info
+    audioQuality: format.audio_quality || format.audioQuality,
+    width: format.width,
+    height: format.height,
+    fps: format.fps,
     contentLength: format.content_length || format.contentLength
   };
 }
@@ -115,6 +145,7 @@ async function handleInfo(url) {
   
   const info = await yt.getInfo(videoId);
   const basic = info.basic_info || {};
+  const formats = getFormats(info);
   
   return json({
     videoId,
@@ -123,7 +154,9 @@ async function handleInfo(url) {
     duration: basic.duration,
     viewCount: basic.view_count,
     thumbnails: basic.thumbnail,
-    formats: getFormats(info)
+    formats,
+    // Helpful note about which formats work
+    note: 'Only formats with downloadable=true can be downloaded. Video-only and audio-only formats are blocked by YouTube bot protection.'
   });
 }
 
@@ -136,43 +169,48 @@ async function handleDownload(url) {
   
   const itag = url.searchParams.get('itag');
   const quality = url.searchParams.get('quality') || 'best';
+  // type can be: 'video+audio' (default), 'video', 'audio'
+  const type = url.searchParams.get('type') || 'video+audio';
+  
+  if (!['video+audio', 'video', 'audio'].includes(type)) {
+    return badRequest('Invalid type. Must be: video+audio, video, or audio');
+  }
+  
+  // NOTE: YouTube's bot protection prevents direct access to adaptive formats (video-only, audio-only)
+  // without a Proof of Origin (po_token). Only combined video+audio streams work reliably.
+  // For video-only or audio-only, consider using yt-dlp command line tool.
+  if (type !== 'video+audio') {
+    return badRequest(
+      'Video-only and audio-only downloads are not supported due to YouTube bot protection. ' +
+      'Only combined video+audio downloads work. Consider using yt-dlp for separate streams.'
+    );
+  }
   
   const info = await yt.getInfo(videoId);
   const title = info.basic_info?.title || 'video';
   
-  // Get all available formats for headers
-  const streaming = info.streaming_data || {};
-  const allFormats = [...(streaming.formats || []), ...(streaming.adaptive_formats || [])];
-  
-  let downloadOptions;
+  let stream;
   let chosen;
   
-  if (itag) {
-    // Download specific format by itag
-    chosen = allFormats.find(f => f.itag === Number(itag));
-    if (!chosen) {
-      return badRequest(`Format with itag ${itag} not found`);
+  try {
+    if (itag) {
+      // Download specific format by itag using chooseFormat
+      chosen = info.chooseFormat({ itag: Number(itag), format: 'any' });
+    } else {
+      // Use chooseFormat with appropriate type
+      chosen = info.chooseFormat({ type: 'video+audio', quality, format: 'any' });
     }
-    // Use format options for specific itag
-    downloadOptions = {
-      type: hasVideo(chosen) && hasAudio(chosen) ? 'video+audio' : (hasVideo(chosen) ? 'video' : 'audio'),
-      quality: chosen.quality_label || quality,
-      format: 'mp4'
-    };
-  } else {
-    // Default: best quality with video+audio
-    downloadOptions = {
+    
+    // Download the chosen format
+    stream = await info.download({ 
       type: 'video+audio',
       quality: quality,
-      format: 'mp4'
-    };
-    // Find the format that will be chosen for headers
-    chosen = allFormats
-      .filter(f => hasVideo(f) && hasAudio(f))
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+      format: 'any',
+      ...(itag ? { itag: Number(itag) } : {})
+    });
+  } catch (e) {
+    return badRequest(`Download failed: ${e.message}`);
   }
-  
-  const stream = await info.download(downloadOptions);
   
   const mimeType = chosen?.mime_type || 'video/mp4';
   const ext = getExtension(mimeType);
