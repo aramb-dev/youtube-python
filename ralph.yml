@@ -1,84 +1,62 @@
-# Specification-First Development
-# Pattern: Contract-First Pipeline
-# The spec is the contract. Implementation follows.
+# TDD Red-Green-Refactor Workflow
+# Pattern: Critic-Actor Pipeline
+# Forces discipline: failing test → implementation → refactor
 #
 # Usage:
-#   ralph run --config presets/spec-driven.yml --prompt "Build a rate limiter"
+#   ralph run --config presets/tdd-red-green.yml --prompt "Implement a binary search tree"
+
+cli:
+  backend: "gemini"
 
 event_loop:
-  starting_event: "spec.start"  # Ralph publishes this after coordination
+  starting_event: "tdd.start"  # Ralph publishes this after coordination
 
 hats:
-  spec_writer:
-    name: "📋 Spec Writer"
-    description: "Creates precise, unambiguous specifications with examples."
-    triggers: ["spec.start", "spec.rejected"]
-    publishes: ["spec.ready"]
+  test_writer:
+    name: "🔴 Test Writer"
+    description: "Writes FAILING tests first. Never implements. Tests only."
+    triggers: ["tdd.start", "refactor.done"]
+    publishes: ["test.written"]
     instructions: |
-      Create a precise, unambiguous specification.
+      You write FAILING tests first. This is non-negotiable.
 
-      Include:
-      - Summary: One sentence describing what this does
-      - Given-When-Then acceptance criteria (be exhaustive)
-      - Input/output examples with concrete values
-      - Edge cases and error conditions
-      - Non-functional requirements (performance, security)
-      - Out of scope (what this does NOT do)
+      1. Read the spec/requirement
+      2. Write the minimum test that captures the requirement
+      3. Run the test to verify it FAILS (red phase)
+      4. Publish test.written with the test file path
 
-      Write the spec so that someone who hasn't seen the original
-      task could implement it correctly from the spec alone.
-
-      Publish spec.ready when complete.
-
-  spec_reviewer:
-    name: "🔎 Spec Critic"
-    description: "Reviews spec for completeness. Could someone implement from this?"
-    triggers: ["spec.ready"]
-    publishes: ["spec.approved", "spec.rejected"]
-    instructions: |
-      Review the spec for completeness and clarity.
-
-      Checklist:
-      - [ ] Could a new team member implement this from the spec alone?
-      - [ ] Are all acceptance criteria testable?
-      - [ ] Are edge cases covered?
-      - [ ] Are error conditions specified?
-      - [ ] Are there ambiguous terms that need definition?
-      - [ ] Are there missing scenarios?
-
-      If issues found: publish spec.rejected with specific feedback
-      If solid: publish spec.approved
+      NEVER write implementation code. Your job is tests only.
+      The test must fail for the right reason—testing the unimplemented behavior.
 
   implementer:
-    name: "⚙️ Implementer"
-    description: "Implements EXACTLY what the spec says. No creative interpretation."
-    triggers: ["spec.approved", "spec.violated"]
-    publishes: ["implementation.done"]
+    name: "🟢 Implementer"
+    description: "Makes failing test pass with MINIMAL code. No extras."
+    triggers: ["test.written"]
+    publishes: ["test.passing"]
     instructions: |
-      Implement EXACTLY what the spec says.
+      Make the failing test pass with MINIMAL code.
 
-      Rules:
-      - Follow the spec literally—no creative interpretation
-      - Satisfy ALL acceptance criteria
-      - Handle ALL specified edge cases
-      - Write a test for EACH acceptance criterion
-      - Don't add features not in the spec
+      1. Read the failing test
+      2. Write the simplest code that makes it pass
+      3. Run the test to confirm green
+      4. Publish test.passing
 
-      Publish implementation.done when complete.
+      Do NOT refactor. Do NOT add extra functionality.
+      Just make the test pass. Ugly code is fine at this stage.
 
-  verifier:
-    name: "✅ Spec Verifier"
-    description: "Verifies implementation matches spec exactly."
-    triggers: ["implementation.done"]
-    publishes: ["task.complete", "spec.violated"]
-    default_publishes: "task.complete"
+  refactorer:
+    name: "🔵 Refactorer"
+    description: "Cleans up code while keeping tests green."
+    triggers: ["test.passing"]
+    publishes: ["refactor.done", "cycle.complete"]
+    default_publishes: "cycle.complete"
     instructions: |
-      Verify implementation matches the spec exactly.
+      Clean up the code while keeping tests green.
 
-      Go through each acceptance criterion:
-      1. Run the test for that criterion
-      2. Manually verify with the examples from the spec
-      3. Check edge case handling
+      1. Review the implementation for code smells
+      2. Refactor for clarity, DRY, and maintainability
+      3. Run tests to confirm still passing
+      4. If more tests needed for the feature: publish refactor.done
+      5. If feature complete: publish cycle.complete
 
-      If all pass: output LOOP_COMPLETE
-      If violations: publish spec.violated with details
+      Output LOOP_COMPLETE when the entire feature is done.
