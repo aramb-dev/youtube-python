@@ -43,13 +43,13 @@
             <p id="meta"></p>
             <div class="actions">
               <button id="quick-download" class="ghost" type="button">
-                Quick download (merged)
+                Quick download (best quality)
               </button>
               <button id="copy-link" class="ghost" type="button">
-                Copy download API
+                Copy download URL
               </button>
             </div>
-            <p class="hint">Merged downloads mux best video + audio into MP4 when available.</p>
+            <p class="hint">Downloads best available video+audio format.</p>
           </div>
         </div>
 
@@ -76,9 +76,9 @@
           </div>
           <div>
             <h4>GET /api/download</h4>
-            <p>Stream a specific format.</p>
-            <code>/api/download?url=VIDEO_URL&amp;itag=ITAG</code>
-            <code>/api/download?url=VIDEO_URL&amp;merge=1&amp;container=mp4</code>
+            <p>Stream video download.</p>
+            <code>/api/download?url=VIDEO_URL</code>
+            <code>/api/download?url=VIDEO_URL&amp;itag=22</code>
           </div>
           <div>
             <h4>GET /api/health</h4>

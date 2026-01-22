@@ -1,95 +1,59 @@
 import { Innertube } from 'youtubei.js';
-import { randomUUID } from 'node:crypto';
-import { unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import {
-  ALL_FORMATS,
-  EncodedAudioPacketSource,
-  EncodedPacketSink,
-  EncodedVideoPacketSource,
-  FilePathSource,
-  FilePathTarget,
-  Input,
-  MkvOutputFormat,
-  Mp4OutputFormat,
-  Output,
-  ReadableStreamSource,
-  StreamTarget,
-  WebMOutputFormat
-} from 'mediabunny';
 
 const PORT = Number(process.env.PORT || 3000);
 const publicDirUrl = new URL('../public/', import.meta.url);
-const ytPromise = Innertube.create({
-  enable_session_cache: true,
+
+// Create Innertube with a JavaScript interpreter for URL deciphering
+const yt = await Innertube.create({
   retrieve_player: true,
-  retrieve_innertube_config: true
+  generate_session_locally: true
 });
 
-const infoCache = new Map();
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// Provide the JS interpreter for deciphering signatures
+yt.session.player.evaluate = (code) => {
+  return eval(code);
+};
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
-  if (!headers.has('content-type')) {
-    headers.set('content-type', 'application/json; charset=utf-8');
-  }
-  return new Response(JSON.stringify(data, null, 2), {
-    ...init,
-    headers
-  });
+  headers.set('content-type', 'application/json; charset=utf-8');
+  return new Response(JSON.stringify(data, null, 2), { ...init, headers });
 }
 
-function badRequest(message, details) {
-  return json({ error: message, details }, { status: 400 });
-}
-
-function notFound() {
-  return new Response('Not found', { status: 404 });
-}
-
-function getCachedInfo(videoId) {
-  const entry = infoCache.get(videoId);
-  if (!entry) return null;
-  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
-    infoCache.delete(videoId);
-    return null;
-  }
-  return entry.info;
-}
-
-function setCachedInfo(videoId, info) {
-  infoCache.set(videoId, { info, timestamp: Date.now() });
+function badRequest(message) {
+  return json({ error: message }, { status: 400 });
 }
 
 function extractVideoId(input) {
   if (!input) return null;
   const trimmed = input.trim();
-  if (!trimmed.includes('http')) {
-    if (trimmed.includes('youtu.')) {
-      return extractVideoId(`https://${trimmed}`);
-    }
-    return trimmed;
-  }
-
+  
+  // Plain video ID
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+  
   try {
-    const url = new URL(trimmed);
+    const url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+    
+    // youtu.be/VIDEO_ID
     if (url.hostname.includes('youtu.be')) {
-      const id = url.pathname.split('/').filter(Boolean)[0];
-      return id || null;
+      return url.pathname.split('/').filter(Boolean)[0] || null;
     }
+    
+    // ?v=VIDEO_ID
     if (url.searchParams.has('v')) {
       return url.searchParams.get('v');
     }
-    const pathMatch = url.pathname.match(/\/(shorts|embed)\/([a-zA-Z0-9_-]+)/);
-    if (pathMatch) return pathMatch[2];
-  } catch (error) {
-    return null;
+    
+    // /shorts/VIDEO_ID or /embed/VIDEO_ID
+    const match = url.pathname.match(/\/(shorts|embed)\/([a-zA-Z0-9_-]+)/);
+    if (match) return match[2];
+  } catch {
+    // Fallback regex
+    const fallback = input.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([a-zA-Z0-9_-]+)/);
+    return fallback ? fallback[1] : null;
   }
-
-  const fallbackMatch = input.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([a-zA-Z0-9_-]+)/);
-  return fallbackMatch ? fallbackMatch[1] : null;
+  
+  return null;
 }
 
 function sanitizeFilename(name) {
@@ -97,129 +61,27 @@ function sanitizeFilename(name) {
     .replace(/[\\/:*?"<>|]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 140) || 'video';
+    .slice(0, 100) || 'video';
 }
 
-function asciiFallbackFilename(name, ext) {
-  const safe = sanitizeFilename(name)
-    .replace(/[^\x20-\x7E]/g, '')
-    .trim()
-    .slice(0, 140) || 'video';
-  return safe.endsWith(`.${ext}`) ? safe : `${safe}.${ext}`;
-}
-
-function contentDisposition(filename, ext) {
-  const fallback = asciiFallbackFilename(filename, ext);
-  const encoded = encodeURIComponent(`${sanitizeFilename(filename)}.${ext}`);
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
-}
-
-function extensionFromMime(mimeType) {
+function getExtension(mimeType) {
   if (!mimeType) return 'mp4';
-  const clean = mimeType.split(';')[0].trim();
-  const mapping = {
+  const mime = mimeType.split(';')[0].trim();
+  const map = {
     'video/mp4': 'mp4',
     'audio/mp4': 'm4a',
     'video/webm': 'webm',
-    'audio/webm': 'webm',
-    'audio/opus': 'opus'
+    'audio/webm': 'webm'
   };
-  return mapping[clean] || clean.split('/')[1] || 'mp4';
-}
-
-function parseBoolean(value) {
-  if (!value) return false;
-  const normalized = value.toLowerCase();
-  return normalized === '1' || normalized === 'true' || normalized === 'yes';
-}
-
-function formatMime(format) {
-  return (format?.mime_type || format?.mimeType || '').split(';')[0].trim().toLowerCase();
-}
-
-function isDownloadableFormat(format) {
-  return Boolean(
-    format?.url ||
-    format?.signature_cipher ||
-    format?.signatureCipher ||
-    format?.cipher
-  );
-}
-
-function isDrmFormat(format) {
-  return Boolean(format?.drm_families || format?.drm_track_type || format?.fair_play_key_uri);
-}
-
-function chooseOutputFormat(videoFormat, audioFormat, container, streaming) {
-  if (container === 'mp4') {
-    return streaming ? new Mp4OutputFormat({ fastStart: 'fragmented' }) : new Mp4OutputFormat();
-  }
-
-  if (container === 'webm') {
-    return new WebMOutputFormat();
-  }
-
-  const videoMime = formatMime(videoFormat);
-  const audioMime = formatMime(audioFormat);
-
-  if (videoMime.includes('mp4') && audioMime.includes('mp4')) {
-    return new Mp4OutputFormat({ fastStart: 'fragmented' });
-  }
-
-  if (videoMime.includes('webm') && audioMime.includes('webm')) {
-    return new WebMOutputFormat();
-  }
-
-  return new MkvOutputFormat();
-}
-
-function filterByContainer(formats, container) {
-  if (!container || container === 'auto') return formats;
-  const normalized = container.toLowerCase();
-  if (normalized === 'mp4') {
-    return formats.filter((format) => formatMime(format).includes('mp4'));
-  }
-  if (normalized === 'webm') {
-    return formats.filter((format) => formatMime(format).includes('webm'));
-  }
-  return formats;
-}
-
-const FALLBACK_HEADERS = {
-  accept: '*/*',
-  origin: 'https://www.youtube.com',
-  referer: 'https://www.youtube.com',
-  DNT: '1',
-  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
-};
-
-function getRawFormats(info) {
-  const streamingData = info.streaming_data || info.streamingData || {};
-  return [
-    ...(streamingData.formats || []),
-    ...(streamingData.adaptive_formats || [])
-  ];
-}
-
-function hasAudio(format) {
-  return Boolean(
-    format.has_audio ??
-    format.hasAudio ??
-    format.audio_quality ??
-    format.audioQuality ??
-    format.audio_bitrate ??
-    format.audioBitrate
-  );
+  return map[mime] || 'mp4';
 }
 
 function hasVideo(format) {
-  return Boolean(
-    format.has_video ??
-    format.hasVideo ??
-    format.quality_label ??
-    format.qualityLabel ??
-    format.width
-  );
+  return !!(format.quality_label || format.qualityLabel || format.width);
+}
+
+function hasAudio(format) {
+  return !!(format.audio_quality || format.audioQuality || format.audio_bitrate);
 }
 
 function normalizeFormat(format) {
@@ -228,544 +90,161 @@ function normalizeFormat(format) {
     mimeType: format.mime_type || format.mimeType,
     qualityLabel: format.quality_label || format.qualityLabel || format.quality,
     bitrate: format.bitrate,
-    fps: format.fps,
-    audioQuality: format.audio_quality || format.audioQuality,
-    audioBitrate: format.audio_bitrate || format.audioBitrate,
-    contentLength: format.content_length || format.contentLength,
+    hasVideo: hasVideo(format),
     hasAudio: hasAudio(format),
-    hasVideo: hasVideo(format)
+    contentLength: format.content_length || format.contentLength
   };
 }
 
-function listFormats(info) {
-  const rawFormats = getRawFormats(info);
+function getFormats(info) {
+  const streaming = info.streaming_data || {};
+  const all = [...(streaming.formats || []), ...(streaming.adaptive_formats || [])];
+  
   const seen = new Set();
-  const formats = [];
-
-  for (const format of rawFormats) {
-    const view = normalizeFormat(format);
-    if (!view.itag || seen.has(view.itag)) continue;
-    seen.add(view.itag);
-    formats.push(view);
-  }
-
-  return formats;
-}
-
-function selectFormat(rawFormats, { itag, quality, type }) {
-  let candidates = rawFormats.slice();
-
-  if (type === 'audio') {
-    candidates = candidates.filter((format) => hasAudio(format) && !hasVideo(format));
-  } else if (type === 'video') {
-    candidates = candidates.filter((format) => hasVideo(format) && !hasAudio(format));
-  } else if (type === 'video+audio') {
-    candidates = candidates.filter((format) => hasVideo(format) && hasAudio(format));
-  }
-
-  if (itag) {
-    const numericItag = Number(itag);
-    return candidates.find((format) => format.itag === numericItag);
-  }
-
-  if (quality) {
-    const desired = quality.toLowerCase();
-    const match = candidates.find((format) => {
-      const label = format.quality_label || format.qualityLabel || format.quality;
-      return label && label.toLowerCase() === desired;
-    });
-    if (match) return match;
-  }
-
-  return candidates.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-}
-
-function selectBestVideoFormat(rawFormats, { quality, itag, container }) {
-  const filtered = filterByContainer(rawFormats, container)
-    .filter((format) => isDownloadableFormat(format) && !isDrmFormat(format));
-
-  if (itag) {
-    const match = filtered.find((format) => format.itag === Number(itag));
-    if (match && hasVideo(match) && !hasAudio(match)) return match;
-  }
-
-  let candidates = filtered.filter((format) => hasVideo(format) && !hasAudio(format));
-
-  if (quality) {
-    const desired = quality.toLowerCase();
-    const match = candidates.find((format) => {
-      const label = format.quality_label || format.qualityLabel || format.quality;
-      return label && label.toLowerCase() === desired;
-    });
-    if (match) return match;
-  }
-
-  candidates = candidates.sort((a, b) => {
-    const aHeight = a.height || a.width || 0;
-    const bHeight = b.height || b.width || 0;
-    if (aHeight !== bHeight) return bHeight - aHeight;
-    return (b.bitrate || 0) - (a.bitrate || 0);
-  });
-
-  return candidates[0];
-}
-
-function selectBestAudioFormat(rawFormats, { itag, container }) {
-  const filtered = filterByContainer(rawFormats, container)
-    .filter((format) => isDownloadableFormat(format) && !isDrmFormat(format));
-
-  if (itag) {
-    const match = filtered.find((format) => format.itag === Number(itag));
-    if (match && hasAudio(match) && !hasVideo(match)) return match;
-  }
-
-  const candidates = filtered
-    .filter((format) => hasAudio(format) && !hasVideo(format))
-    .sort((a, b) => {
-      const aRate = a.audio_bitrate || a.audioBitrate || a.bitrate || 0;
-      const bRate = b.audio_bitrate || b.audioBitrate || b.bitrate || 0;
-      return bRate - aRate;
-    });
-
-  return candidates[0];
-}
-
-function selectBestMuxedFormat(rawFormats, { quality, container }) {
-  const filtered = filterByContainer(rawFormats, container)
-    .filter((format) => hasVideo(format) && hasAudio(format))
-    .filter((format) => isDownloadableFormat(format) && !isDrmFormat(format));
-
-  if (quality) {
-    const desired = quality.toLowerCase();
-    const match = filtered.find((format) => {
-      const label = format.quality_label || format.qualityLabel || format.quality;
-      return label && label.toLowerCase() === desired;
-    });
-    if (match) return match;
-  }
-
-  return filtered.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-}
-
-function toWebStream(stream) {
-  if (!stream) return stream;
-  if (typeof stream.getReader === 'function') return stream;
-  if (typeof stream.pipe === 'function') {
-    return new ReadableStream({
-      start(controller) {
-        stream.on('data', (chunk) => controller.enqueue(chunk));
-        stream.on('end', () => controller.close());
-        stream.on('error', (error) => controller.error(error));
-      },
-      cancel() {
-        if (stream.destroy) stream.destroy();
-      }
-    });
-  }
-  return stream;
-}
-
-function resolvePublicFile(pathname) {
-  const cleanPath = pathname === '/' ? '/index.html' : pathname;
-  const fileUrl = new URL(`.${cleanPath}`, publicDirUrl);
-
-  if (!fileUrl.pathname.startsWith(publicDirUrl.pathname)) {
-    return null;
-  }
-
-  return fileUrl;
-}
-
-function createTempPath(extension) {
-  const suffix = extension ? `.${extension}` : '';
-  return join(tmpdir(), `yt-merge-${randomUUID()}${suffix}`);
-}
-
-async function safeUnlink(filePath) {
-  if (!filePath) return;
-  try {
-    await unlink(filePath);
-  } catch {
-    // ignore
-  }
-}
-
-async function downloadToTempFile(info, format) {
-  const ext = extensionFromMime(format?.mime_type || format?.mimeType);
-  const filePath = createTempPath(ext);
-  const stream = toWebStream(await downloadStream(info, format));
-  await Bun.write(filePath, stream);
-  return filePath;
-}
-
-function fileStreamWithCleanup(filePath) {
-  const fileStream = Bun.file(filePath).stream();
-  return new ReadableStream({
-    async start(controller) {
-      const reader = fileStream.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) controller.enqueue(value);
-        }
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      } finally {
-        await safeUnlink(filePath);
-      }
-    },
-    cancel() {
-      return safeUnlink(filePath);
-    }
-  });
-}
-
-async function manualFormatFetch(format, info) {
-  const player = info.actions?.session?.player;
-  const url = format?.decipher ? format.decipher(player) : format?.url;
-  if (!url) {
-    throw new Error('No valid URL to decipher');
-  }
-
-  const response = await fetch(url, {
-    headers: FALLBACK_HEADERS
-  });
-  if (!response.ok) {
-    throw new Error(`Manual fetch failed (${response.status})`);
-  }
-  if (!response.body) {
-    throw new Error('Manual fetch returned no body');
-  }
-
-  return response.body;
-}
-
-async function downloadStream(info, format) {
-  try {
-    return await info.download(format);
-  } catch (error) {
-    console.warn('Download retry with manual fetch', { itag: format?.itag, reason: error?.message });
-  }
-
-  return manualFormatFetch(format, info);
-}
-
-async function streamMergedDownload(info, videoFormat, audioFormat, container) {
-  const useTempFiles = container === 'mp4';
-  const outputFormat = chooseOutputFormat(videoFormat, audioFormat, container, !useTempFiles);
-  let readable;
-  let writable;
-  let outputFilePath;
-
-  if (useTempFiles) {
-    outputFilePath = createTempPath(outputFormat.fileExtension);
-  } else {
-    ({ readable, writable } = new TransformStream({
-      transform(chunk, controller) {
-        controller.enqueue(chunk.data);
-      }
-    }));
-  }
-
-  const output = new Output({
-    format: outputFormat,
-    target: useTempFiles ? new FilePathTarget(outputFilePath) : new StreamTarget(writable)
-  });
-
-  const process = (async () => {
-    let videoInput;
-    let audioInput;
-    let videoTempPath;
-    let audioTempPath;
-
-    try {
-      if (useTempFiles) {
-        [videoTempPath, audioTempPath] = await Promise.all([
-          downloadToTempFile(info, videoFormat),
-          downloadToTempFile(info, audioFormat)
-        ]);
-
-        videoInput = new Input({
-          formats: ALL_FORMATS,
-          source: new FilePathSource(videoTempPath)
-        });
-        audioInput = new Input({
-          formats: ALL_FORMATS,
-          source: new FilePathSource(audioTempPath)
-        });
-      } else {
-        const videoStream = toWebStream(await downloadStream(info, videoFormat));
-        const audioStream = toWebStream(await downloadStream(info, audioFormat));
-
-        videoInput = new Input({
-          formats: ALL_FORMATS,
-          source: new ReadableStreamSource(videoStream)
-        });
-        audioInput = new Input({
-          formats: ALL_FORMATS,
-          source: new ReadableStreamSource(audioStream)
-        });
-      }
-
-      const videoTrack = await videoInput.getPrimaryVideoTrack();
-      const audioTrack = await audioInput.getPrimaryAudioTrack();
-
-      if (!videoTrack || !audioTrack) {
-        throw new Error('Missing video or audio track.');
-      }
-      if (!videoTrack.codec || !audioTrack.codec) {
-        throw new Error('Unsupported codec for merge.');
-      }
-
-      const videoSource = new EncodedVideoPacketSource(videoTrack.codec);
-      const audioSource = new EncodedAudioPacketSource(audioTrack.codec);
-
-      output.addVideoTrack(videoSource, { rotation: videoTrack.rotation });
-      output.addAudioTrack(audioSource);
-
-      await output.start();
-
-      const [videoDecoderConfig, audioDecoderConfig] = await Promise.all([
-        videoTrack.getDecoderConfig().catch(() => null),
-        audioTrack.getDecoderConfig().catch(() => null)
-      ]);
-
-      const videoSink = new EncodedPacketSink(videoTrack);
-      const audioSink = new EncodedPacketSink(audioTrack);
-
-      const pump = async (sink, source, decoderConfig) => {
-        let first = true;
-        for await (const packet of sink.packets()) {
-          if (first) {
-            await source.add(packet, decoderConfig ? { decoderConfig } : undefined);
-            first = false;
-          } else {
-            await source.add(packet);
-          }
-        }
-      };
-
-      await Promise.all([
-        pump(videoSink, videoSource, videoDecoderConfig),
-        pump(audioSink, audioSource, audioDecoderConfig)
-      ]);
-
-      await output.finalize();
-    } finally {
-      videoInput?.dispose();
-      audioInput?.dispose();
-      await safeUnlink(videoTempPath);
-      await safeUnlink(audioTempPath);
-    }
-  })();
-
-  if (useTempFiles) {
-    await process;
-    return {
-      stream: fileStreamWithCleanup(outputFilePath),
-      mimeType: outputFormat.mimeType,
-      ext: outputFormat.fileExtension
-    };
-  }
-
-  process.catch(async (error) => {
-    try {
-      await writable.abort(error);
-    } catch {
-      // ignore
-    }
-  });
-
-  return {
-    stream: readable,
-    mimeType: outputFormat.mimeType,
-    ext: outputFormat.fileExtension
-  };
+  return all
+    .filter(f => f.itag && !seen.has(f.itag) && seen.add(f.itag))
+    .map(normalizeFormat);
 }
 
 async function handleInfo(url) {
   const input = url.searchParams.get('url');
-  if (!input) return badRequest('Missing url parameter.');
-
+  if (!input) return badRequest('Missing url parameter');
+  
   const videoId = extractVideoId(input);
-  if (!videoId) return badRequest('Unable to extract a valid video ID.');
-
-  const cached = getCachedInfo(videoId);
-  if (cached) return json(cached);
-
-  const yt = await ytPromise;
+  if (!videoId) return badRequest('Invalid video URL or ID');
+  
   const info = await yt.getInfo(videoId);
-
-  const data = {
+  const basic = info.basic_info || {};
+  
+  return json({
     videoId,
-    title: info.basic_info?.title || info.basic_info?.title_text || 'Unknown title',
-    author: info.basic_info?.author?.name || info.basic_info?.author || info.basic_info?.channel?.name,
-    durationSeconds: Number(info.basic_info?.duration || info.basic_info?.duration_seconds) || null,
-    viewCount: Number(info.basic_info?.view_count) || null,
-    thumbnails: info.basic_info?.thumbnail || info.basic_info?.thumbnails,
-    formats: listFormats(info)
-  };
-
-  setCachedInfo(videoId, data);
-  return json(data);
+    title: basic.title || 'Unknown',
+    author: basic.author || basic.channel?.name,
+    duration: basic.duration,
+    viewCount: basic.view_count,
+    thumbnails: basic.thumbnail,
+    formats: getFormats(info)
+  });
 }
 
 async function handleDownload(url) {
   const input = url.searchParams.get('url');
-  if (!input) return badRequest('Missing url parameter.');
-
+  if (!input) return badRequest('Missing url parameter');
+  
   const videoId = extractVideoId(input);
-  if (!videoId) return badRequest('Unable to extract a valid video ID.');
-
+  if (!videoId) return badRequest('Invalid video URL or ID');
+  
   const itag = url.searchParams.get('itag');
-  const quality = url.searchParams.get('quality');
-  const type = url.searchParams.get('type') || 'video+audio';
-  const merge = parseBoolean(url.searchParams.get('merge'));
-  const videoItag = url.searchParams.get('video_itag');
-  const audioItag = url.searchParams.get('audio_itag');
-  const container = (url.searchParams.get('container') || 'mp4').toLowerCase();
-
-  const yt = await ytPromise;
+  const quality = url.searchParams.get('quality') || 'best';
+  
   const info = await yt.getInfo(videoId);
-  const rawFormats = getRawFormats(info);
-
-  if (merge) {
-    const videoFormat = selectBestVideoFormat(rawFormats, { quality, itag: videoItag, container });
-    const audioFormat = selectBestAudioFormat(rawFormats, { itag: audioItag, container });
-
-    if (!videoFormat || !audioFormat) {
-      if (container === 'mp4') {
-        const muxed = selectBestMuxedFormat(rawFormats, { quality, container });
-        if (muxed) {
-          const stream = await downloadStream(info, muxed);
-          const mimeType = muxed.mime_type || muxed.mimeType || 'application/octet-stream';
-          const ext = extensionFromMime(mimeType);
-          const filename = info.basic_info?.title || 'video';
-          const contentLength = muxed.content_length || muxed.contentLength;
-          const headers = new Headers({
-            'content-type': mimeType,
-            'content-disposition': contentDisposition(filename, ext),
-            'cache-control': 'no-store'
-          });
-          if (contentLength) {
-            headers.set('content-length', String(contentLength));
-          }
-          return new Response(toWebStream(stream), { headers });
-        }
-      }
-
-      return badRequest(`Unable to select ${container} video + audio formats for merge.`);
+  const title = info.basic_info?.title || 'video';
+  
+  // Get all available formats for headers
+  const streaming = info.streaming_data || {};
+  const allFormats = [...(streaming.formats || []), ...(streaming.adaptive_formats || [])];
+  
+  let downloadOptions;
+  let chosen;
+  
+  if (itag) {
+    // Download specific format by itag
+    chosen = allFormats.find(f => f.itag === Number(itag));
+    if (!chosen) {
+      return badRequest(`Format with itag ${itag} not found`);
     }
-
-    try {
-      const merged = await streamMergedDownload(info, videoFormat, audioFormat, container);
-      const filename = info.basic_info?.title || 'video';
-
-      return new Response(toWebStream(merged.stream), {
-        headers: {
-          'content-type': merged.mimeType,
-          'content-disposition': contentDisposition(filename, merged.ext),
-          'cache-control': 'no-store'
-        }
-      });
-    } catch (error) {
-      return badRequest('Unable to merge formats with mediabunny.', error?.message);
-    }
+    // Use format options for specific itag
+    downloadOptions = {
+      type: hasVideo(chosen) && hasAudio(chosen) ? 'video+audio' : (hasVideo(chosen) ? 'video' : 'audio'),
+      quality: chosen.quality_label || quality,
+      format: 'mp4'
+    };
+  } else {
+    // Default: best quality with video+audio
+    downloadOptions = {
+      type: 'video+audio',
+      quality: quality,
+      format: 'mp4'
+    };
+    // Find the format that will be chosen for headers
+    chosen = allFormats
+      .filter(f => hasVideo(f) && hasAudio(f))
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
   }
-
-  let chosen = null;
-
-  if (typeof info.chooseFormat === 'function') {
-    try {
-      chosen = info.chooseFormat({
-        itag: itag ? Number(itag) : undefined,
-        quality: quality || 'best',
-        type
-      });
-    } catch (error) {
-      chosen = null;
-    }
-  }
-
-  if (!chosen) {
-    chosen = selectFormat(rawFormats, { itag, quality, type });
-  }
-
-  if (!chosen) {
-    return badRequest('No matching format found.');
-  }
-
-  const stream = await downloadStream(info, chosen);
-  const mimeType = chosen.mime_type || chosen.mimeType || 'application/octet-stream';
-  const ext = extensionFromMime(mimeType);
-  const filename = info.basic_info?.title || 'video';
-  const contentLength = chosen.content_length || chosen.contentLength;
-
+  
+  const stream = await info.download(downloadOptions);
+  
+  const mimeType = chosen?.mime_type || 'video/mp4';
+  const ext = getExtension(mimeType);
+  const filename = sanitizeFilename(title);
+  
   const headers = new Headers({
     'content-type': mimeType,
-    'content-disposition': contentDisposition(filename, ext),
+    'content-disposition': `attachment; filename="${filename}.${ext}"`,
     'cache-control': 'no-store'
   });
-
-  if (contentLength) {
-    headers.set('content-length', String(contentLength));
+  
+  if (chosen?.content_length) {
+    headers.set('content-length', String(chosen.content_length));
   }
-
-  return new Response(toWebStream(stream), {
-    headers
-  });
+  
+  return new Response(stream, { headers });
 }
 
 async function handleRequest(req) {
   const url = new URL(req.url);
-
-  if (url.pathname.startsWith('/api/')) {
-    if (req.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'access-control-allow-origin': '*',
-          'access-control-allow-methods': 'GET, OPTIONS',
-          'access-control-allow-headers': 'content-type'
-        }
-      });
-    }
-
-    if (url.pathname === '/api/health') {
-      return json({ ok: true, time: new Date().toISOString() }, {
-        headers: { 'access-control-allow-origin': '*' }
-      });
-    }
-
-    try {
-      if (url.pathname === '/api/info') {
-        const response = await handleInfo(url);
-        response.headers.set('access-control-allow-origin', '*');
-        return response;
+  
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET, OPTIONS',
+        'access-control-allow-headers': 'content-type'
       }
-      if (url.pathname === '/api/download') {
-        const response = await handleDownload(url);
-        response.headers.set('access-control-allow-origin', '*');
-        return response;
-      }
-    } catch (error) {
-      return json({ error: 'Request failed.', details: error?.message }, {
-        status: 500,
-        headers: { 'access-control-allow-origin': '*' }
-      });
-    }
-
-    return notFound();
+    });
   }
-
-  const fileUrl = resolvePublicFile(url.pathname);
-  if (!fileUrl) return notFound();
-
+  
+  // API routes
+  if (url.pathname === '/api/health') {
+    return json({ ok: true });
+  }
+  
+  if (url.pathname === '/api/info') {
+    try {
+      const res = await handleInfo(url);
+      res.headers.set('access-control-allow-origin', '*');
+      return res;
+    } catch (e) {
+      return json({ error: e.message }, { status: 500 });
+    }
+  }
+  
+  if (url.pathname === '/api/download') {
+    try {
+      const res = await handleDownload(url);
+      res.headers.set('access-control-allow-origin', '*');
+      return res;
+    } catch (e) {
+      return json({ error: e.message }, { status: 500 });
+    }
+  }
+  
+  // Static files
+  const filePath = url.pathname === '/' ? '/index.html' : url.pathname;
+  const fileUrl = new URL(`.${filePath}`, publicDirUrl);
+  
+  if (!fileUrl.pathname.startsWith(publicDirUrl.pathname)) {
+    return new Response('Not found', { status: 404 });
+  }
+  
   const file = Bun.file(fileUrl);
-  if (!(await file.exists())) return notFound();
-  return new Response(file);
+  if (await file.exists()) {
+    return new Response(file);
+  }
+  
+  return new Response('Not found', { status: 404 });
 }
 
 Bun.serve({
@@ -773,4 +252,4 @@ Bun.serve({
   fetch: handleRequest
 });
 
-console.log(`Server running on http://localhost:${PORT}`);
+console.log(`🎬 YouTube Downloader running at http://localhost:${PORT}`);

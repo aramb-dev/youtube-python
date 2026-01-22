@@ -144,8 +144,6 @@ quickDownloadBtn.addEventListener('click', () => {
   if (!currentUrl) return;
   const url = new URL('/api/download', window.location.origin);
   url.searchParams.set('url', currentUrl);
-  url.searchParams.set('merge', '1');
-  url.searchParams.set('container', 'mp4');
   window.location.href = url.toString();
 });
 
@@ -153,8 +151,6 @@ copyLinkBtn.addEventListener('click', async () => {
   if (!currentUrl) return;
   const url = new URL('/api/download', window.location.origin);
   url.searchParams.set('url', currentUrl);
-  url.searchParams.set('merge', '1');
-  url.searchParams.set('container', 'mp4');
 
   try {
     await navigator.clipboard.writeText(url.toString());
